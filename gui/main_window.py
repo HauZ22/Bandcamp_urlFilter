@@ -2,7 +2,42 @@ import tkinter as tk
 from tkinter import ttk, filedialog
 import os
 from datetime import datetime
+import re
 import threading
+
+def format_timestamp_for_ui(ts: str) -> str:
+    """Converts '2026-02-16T12:00:00Z' to '16.02.2026 12:00' for display."""
+    if not ts:
+        return ""
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})", ts)
+    if m:
+        return f"{m.group(3)}.{m.group(2)}.{m.group(1)} {m.group(4)}:{m.group(5)}"
+    return ts
+
+def parse_timestamp_from_ui(ts: str) -> str:
+    """Converts user input back to ISO format 'YYYY-MM-DDTHH:MM:SSZ'."""
+    ts = ts.strip()
+    if not ts:
+        return ""
+    if "T" in ts and ts.endswith("Z"):
+        return ts
+    
+    formats = [
+        "%d.%m.%Y %H:%M",
+        "%d.%m.%Y",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d",
+        "%d.%m.%Y %H:%M:%S",
+        "%Y-%m-%d %H:%M:%S"
+    ]
+    for fmt in formats:
+        try:
+            dt = datetime.strptime(ts, fmt)
+            return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        except ValueError:
+            pass
+    return ts
+
 
 from core.settings import AppSettings, SettingsManager
 from core.service import ImportService, MonitorService
@@ -91,7 +126,7 @@ class MainWindow(tk.Tk):
         self.var_filter_timestamp = tk.BooleanVar()
         ttk.Checkbutton(options_frame, text="Filter by Timestamp", variable=self.var_filter_timestamp).grid(row=4, column=0, sticky="w", pady=2)
         
-        ttk.Label(options_frame, text="Last TS:").grid(row=4, column=1, sticky="e", padx=5, pady=2)
+        ttk.Label(options_frame, text="Last TS (DD.MM.YYYY (HH:MM)):").grid(row=4, column=1, sticky="e", padx=5, pady=2)
         self.entry_last_timestamp = ttk.Entry(options_frame, width=25)
         self.entry_last_timestamp.grid(row=4, column=2, sticky="w", pady=2)
 
@@ -155,7 +190,7 @@ class MainWindow(tk.Tk):
                     ts = parts[1]
                     self.settings.last_export_timestamp = ts
                     self.entry_last_timestamp.delete(0, tk.END)
-                    self.entry_last_timestamp.insert(0, ts)
+                    self.entry_last_timestamp.insert(0, format_timestamp_for_ui(ts))
                     SettingsManager.save(self.settings)
         
         self.after(0, _apply)
@@ -179,7 +214,7 @@ class MainWindow(tk.Tk):
         self.entry_custom_filename.insert(0, self.settings.custom_filename)
         self.var_add_filter_info.set(self.settings.add_filter_info)
         self.var_filter_timestamp.set(self.settings.filter_by_timestamp)
-        self.entry_last_timestamp.insert(0, self.settings.last_export_timestamp)
+        self.entry_last_timestamp.insert(0, format_timestamp_for_ui(self.settings.last_export_timestamp))
 
     def _save_settings_from_ui(self):
         self.settings.log_file_path = self.entry_log_file.get().strip()
@@ -190,7 +225,7 @@ class MainWindow(tk.Tk):
         self.settings.custom_filename = self.entry_custom_filename.get().strip()
         self.settings.add_filter_info = self.var_add_filter_info.get()
         self.settings.filter_by_timestamp = self.var_filter_timestamp.get()
-        self.settings.last_export_timestamp = self.entry_last_timestamp.get().strip()
+        self.settings.last_export_timestamp = parse_timestamp_from_ui(self.entry_last_timestamp.get().strip())
         
         # Parse ints safely
         try:
