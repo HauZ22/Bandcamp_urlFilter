@@ -28,9 +28,14 @@ class LogFilter:
         if '2026' not in entry.release_date and '2026' not in meta_lower:
             return False
 
-        # 3. Free
-        if entry.free_flag.lower() != 'free' and 'free' not in meta_lower:
-            return False
+        # 3. Free/Paid/All Filter
+        mode = self.settings.free_filter_mode.lower()
+        if mode in ["free", "paid"]:
+            is_free = entry.free_flag.lower() == 'free' or 'free' in meta_lower
+            if mode == "free" and not is_free:
+                return False
+            if mode == "paid" and is_free:
+                return False
 
         # 4. Min Tracks
         if self.settings.min_tracks is not None:

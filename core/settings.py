@@ -10,6 +10,7 @@ class AppSettings:
     log_file_path: str = ""
     output_folder_path: str = ""
     mode: str = "import" # "import" or "monitor"
+    free_filter_mode: str = "free" # "all", "free", "paid"
     append_description: bool = False
     avoid_duplicates: bool = True
     min_tracks: Optional[int] = None

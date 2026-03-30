@@ -87,45 +87,54 @@ class MainWindow(ctk.CTk):
         self.var_mode = ctk.StringVar(value="import")
         ctk.CTkRadioButton(mode_frame, text="Import", variable=self.var_mode, value="import").pack(side="left", padx=5)
         ctk.CTkRadioButton(mode_frame, text="Monitor", variable=self.var_mode, value="monitor").pack(side="left", padx=5)
+
+        # Free Filter Mode
+        free_filter_frame = ctk.CTkFrame(options_frame, fg_color="transparent")
+        free_filter_frame.grid(row=1, column=0, columnspan=4, sticky="w", pady=5, padx=5)
+        ctk.CTkLabel(free_filter_frame, text="Price:").pack(side="left", padx=(0, 10))
+        self.var_free_filter_mode = ctk.StringVar(value="free")
+        ctk.CTkRadioButton(free_filter_frame, text="All", variable=self.var_free_filter_mode, value="all").pack(side="left", padx=5)
+        ctk.CTkRadioButton(free_filter_frame, text="Free", variable=self.var_free_filter_mode, value="free").pack(side="left", padx=5)
+        ctk.CTkRadioButton(free_filter_frame, text="Paid", variable=self.var_free_filter_mode, value="paid").pack(side="left", padx=5)
         
         # Checkboxes & Gen Options
         self.var_append_desc = ctk.BooleanVar()
-        ctk.CTkCheckBox(options_frame, text="Append description", variable=self.var_append_desc).grid(row=1, column=0, sticky="w", pady=5, padx=5)
+        ctk.CTkCheckBox(options_frame, text="Append description", variable=self.var_append_desc).grid(row=2, column=0, sticky="w", pady=5, padx=5)
         
         self.var_avoid_dup = ctk.BooleanVar()
-        ctk.CTkCheckBox(options_frame, text="Avoid duplicates", variable=self.var_avoid_dup).grid(row=2, column=0, sticky="w", pady=5, padx=5)
+        ctk.CTkCheckBox(options_frame, text="Avoid duplicates", variable=self.var_avoid_dup).grid(row=3, column=0, sticky="w", pady=5, padx=5)
         
         # Numeric Filters
-        ctk.CTkLabel(options_frame, text="Min tracks:").grid(row=1, column=1, sticky="e", padx=5, pady=5)
+        ctk.CTkLabel(options_frame, text="Min tracks:").grid(row=2, column=1, sticky="e", padx=5, pady=5)
         self.entry_min_tracks = ctk.CTkEntry(options_frame, width=80)
-        self.entry_min_tracks.grid(row=1, column=2, sticky="w", pady=5)
+        self.entry_min_tracks.grid(row=2, column=2, sticky="w", pady=5)
 
-        ctk.CTkLabel(options_frame, text="Max tracks:").grid(row=1, column=3, sticky="e", padx=5, pady=5)
+        ctk.CTkLabel(options_frame, text="Max tracks:").grid(row=2, column=3, sticky="e", padx=5, pady=5)
         self.entry_max_tracks = ctk.CTkEntry(options_frame, width=80)
-        self.entry_max_tracks.grid(row=1, column=4, sticky="w", pady=5)
+        self.entry_max_tracks.grid(row=2, column=4, sticky="w", pady=5)
         
-        ctk.CTkLabel(options_frame, text="Min duration (min):").grid(row=2, column=1, sticky="e", padx=5, pady=5)
+        ctk.CTkLabel(options_frame, text="Min duration (min):").grid(row=3, column=1, sticky="e", padx=5, pady=5)
         self.entry_min_duration = ctk.CTkEntry(options_frame, width=80)
-        self.entry_min_duration.grid(row=2, column=2, sticky="w", pady=5)
+        self.entry_min_duration.grid(row=3, column=2, sticky="w", pady=5)
 
-        ctk.CTkLabel(options_frame, text="Max duration (min):").grid(row=2, column=3, sticky="e", padx=5, pady=5)
+        ctk.CTkLabel(options_frame, text="Max duration (min):").grid(row=3, column=3, sticky="e", padx=5, pady=5)
         self.entry_max_duration = ctk.CTkEntry(options_frame, width=80)
-        self.entry_max_duration.grid(row=2, column=4, sticky="w", pady=5)
+        self.entry_max_duration.grid(row=3, column=4, sticky="w", pady=5)
 
         # Export Naming & Timestamp Logic
-        ctk.CTkLabel(options_frame, text="Filename:").grid(row=3, column=0, sticky="w", pady=5, padx=5)
+        ctk.CTkLabel(options_frame, text="Filename:").grid(row=4, column=0, sticky="w", pady=5, padx=5)
         self.entry_custom_filename = ctk.CTkEntry(options_frame, width=150)
-        self.entry_custom_filename.grid(row=3, column=1, columnspan=2, sticky="w", pady=5)
+        self.entry_custom_filename.grid(row=4, column=1, columnspan=2, sticky="w", pady=5)
         
         self.var_add_filter_info = ctk.BooleanVar()
-        ctk.CTkCheckBox(options_frame, text="Add filter info to filename", variable=self.var_add_filter_info).grid(row=3, column=2, columnspan=2, sticky="w", pady=5, padx=5)
+        ctk.CTkCheckBox(options_frame, text="Add filter info to filename", variable=self.var_add_filter_info).grid(row=4, column=3, columnspan=2, sticky="w", pady=5, padx=5)
 
         self.var_filter_timestamp = ctk.BooleanVar()
-        ctk.CTkCheckBox(options_frame, text="Filter by Timestamp", variable=self.var_filter_timestamp).grid(row=4, column=0, sticky="w", pady=5, padx=5)
+        ctk.CTkCheckBox(options_frame, text="Filter by Timestamp", variable=self.var_filter_timestamp).grid(row=5, column=0, sticky="w", pady=5, padx=5)
         
-        ctk.CTkLabel(options_frame, text="Last TS (DD.MM.YYYY (HH:MM)):").grid(row=4, column=1, sticky="e", padx=5, pady=5)
+        ctk.CTkLabel(options_frame, text="Last TS (DD.MM.YYYY (HH:MM)):").grid(row=5, column=1, sticky="e", padx=5, pady=5)
         self.entry_last_timestamp = ctk.CTkEntry(options_frame, width=200)
-        self.entry_last_timestamp.grid(row=4, column=2, columnspan=2, sticky="w", pady=5)
+        self.entry_last_timestamp.grid(row=5, column=2, columnspan=2, sticky="w", pady=5)
 
         # --- Action Buttons ---
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -196,6 +205,7 @@ class MainWindow(ctk.CTk):
         self.entry_log_file.insert(0, self.settings.log_file_path)
         self.entry_out_folder.insert(0, self.settings.output_folder_path)
         self.var_mode.set(self.settings.mode if self.settings.mode in ["import", "monitor"] else "import")
+        self.var_free_filter_mode.set(self.settings.free_filter_mode if self.settings.free_filter_mode in ["all", "free", "paid"] else "free")
         self.var_append_desc.set(self.settings.append_description)
         self.var_avoid_dup.set(self.settings.avoid_duplicates)
         
@@ -217,6 +227,7 @@ class MainWindow(ctk.CTk):
         self.settings.log_file_path = self.entry_log_file.get().strip()
         self.settings.output_folder_path = self.entry_out_folder.get().strip()
         self.settings.mode = self.var_mode.get()
+        self.settings.free_filter_mode = self.var_free_filter_mode.get()
         self.settings.append_description = self.var_append_desc.get()
         self.settings.avoid_duplicates = self.var_avoid_dup.get()
         self.settings.custom_filename = self.entry_custom_filename.get().strip()
