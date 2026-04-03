@@ -1,3 +1,5 @@
-# Dieses Projekt verwendet ausschließlich die Python Standardbibliothek.
-# Es sind keine externen Pakete erforderlich.
-# (z.B. tkinter ist Teil der Standardbibliothek)
+streamlit>=1.32.0
+beautifulsoup4>=4.12.3
+rapidfuzz>=3.6.1
+python-dotenv>=1.0.1
+aiohttp>=3.9.3
