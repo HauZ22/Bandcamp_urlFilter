@@ -1,6 +1,7 @@
 import re
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Any
+from datetime import datetime, date
 
 ANSI_ESCAPE_PATTERN = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 LOG_LINE_PATTERN = re.compile(
@@ -18,7 +19,7 @@ class LogEntry:
     genre: str = ""
     track_count: Optional[int] = None
     duration_min: Optional[int] = None
-    release_date: str = ""
+    release_date: Optional[date] = None
     free_flag: str = ""
     original_line: str = ""
 
@@ -68,7 +69,11 @@ def parse_line(line: str) -> Optional[LogEntry]:
         if len(parts) > 0: entry.genre = parts[0]
         if len(parts) > 1 and parts[1].isdigit(): entry.track_count = int(parts[1])
         if len(parts) > 2: entry.duration_min = parse_duration(parts[2])
-        if len(parts) > 3: entry.release_date = parts[3]
+        if len(parts) > 3:
+            try:
+                entry.release_date = datetime.strptime(parts[3].strip(), '%Y-%m-%d').date()
+            except (ValueError, IndexError):
+                entry.release_date = None
         if len(parts) > 4: entry.free_flag = parts[4]
         
     return entry
