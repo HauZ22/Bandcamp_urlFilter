@@ -21,6 +21,8 @@ tag_input = st.sidebar.text_input("🏷️ Genre / Tag", value="", help="Filter 
 location_input = st.sidebar.text_input("📍 Location", value="", help="Filter by Location parsing")
 min_tracks = st.sidebar.number_input("🔢 Min Tracks", min_value=1, value=None, step=1, help="Leave empty for no minimum")
 max_tracks = st.sidebar.number_input("🔢 Max Tracks", min_value=1, value=None, step=1, help="Leave empty for no maximum")
+min_duration = st.sidebar.number_input("⏱️ Min Duration (min)", min_value=1, value=None, step=1, help="Leave empty for no minimum")
+max_duration = st.sidebar.number_input("⏱️ Max Duration (min)", min_value=1, value=None, step=1, help="Leave empty for no maximum")
 
 free_mode = st.sidebar.selectbox("💸 Pricing", options=["All", "Free", "Paid"], index=0)
 
@@ -39,6 +41,8 @@ async def process_urls(lines: List[str]):
         "location": location_input,
         "min_tracks": int(min_tracks) if min_tracks else None,
         "max_tracks": int(max_tracks) if max_tracks else None,
+        "min_duration": int(min_duration) if min_duration else None,
+        "max_duration": int(max_duration) if max_duration else None,
         "free_mode": free_mode
     }
     
@@ -57,7 +61,7 @@ async def process_urls(lines: List[str]):
         
     if dry_run:
         st.info("Dry Run enabled. Qobuz matching skipped. Showing filtered URLs:")
-        df = pd.DataFrame([{ "Bandcamp URL": e.url, "Artist": e.artist, "Title": e.title, "Genre": e.genre, "Tracks": e.track_count } for e in filtered_entries])
+        df = pd.DataFrame([{ "Bandcamp URL": e.url, "Artist": e.artist, "Title": e.title, "Genre": e.genre, "Tracks": e.track_count, "Duration (min)": e.duration_min } for e in filtered_entries])
         st.dataframe(
             df,
             column_config={

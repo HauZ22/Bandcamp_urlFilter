@@ -89,6 +89,8 @@ def filter_entries(lines: List[str], filters: Dict[str, Any]) -> List[LogEntry]:
     location_filter = filters.get("location", "").lower().strip()
     min_tracks = filters.get("min_tracks")
     max_tracks = filters.get("max_tracks")
+    min_duration = filters.get("min_duration")
+    max_duration = filters.get("max_duration")
     free_mode = filters.get("free_mode", "All").lower()
 
     for line in lines:
@@ -112,6 +114,12 @@ def filter_entries(lines: List[str], filters: Dict[str, Any]) -> List[LogEntry]:
             continue
             
         if max_tracks is not None and (entry.track_count is None or entry.track_count > max_tracks):
+            continue
+            
+        if min_duration is not None and (entry.duration_min is None or entry.duration_min < min_duration):
+            continue
+            
+        if max_duration is not None and (entry.duration_min is None or entry.duration_min > max_duration):
             continue
 
         if free_mode in ["free", "paid"]:
