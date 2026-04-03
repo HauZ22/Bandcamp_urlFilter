@@ -43,6 +43,18 @@ This tool helps you:
    ```
    (Sie müssen möglicherweise eine `requirements.txt` Datei erstellen, die `streamlit`, `pandas`, `aiohttp`, `rapidfuzz`, `python-dotenv` enthält.)
 
+## ⚙️ Konfiguration (Qobuz API)
+
+Für die Metadaten-Suche bei Qobuz werden API-Zugangsdaten benötigt. Erstelle dazu im Hauptverzeichnis eine `.env` Datei. Diese Datei wird von Git ignoriert und enthält sensible Daten.
+
+Beispiel für den Inhalt der `.env` Datei:
+```env
+# Optional: Setze deine eigene Qobuz App ID (Standard ist ein offener Web-Client 100000000)
+QOBUZ_APP_ID=100000000
+# Erforderlich (je nach Region/Account-Typ): Setze deinen User Auth Token für Qobuz
+QOBUZ_USER_AUTH_TOKEN=dein_qobuz_token_hier
+```
+
 ## 📖 Nutzung
 
 1. Starten Sie die Streamlit-Anwendung:
