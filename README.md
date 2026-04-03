@@ -1,31 +1,28 @@
-# Bandcamp LinkFilter
+# Bandcamp to Qobuz Matcher
 
-Ein Python-Tool zum Filtern und Extrahieren von Bandcamp-Links aus IRC-Logdateien. Dieses Programm hilft dabei, gezielt Musik-Releases zu finden, die bestimmten Kriterien entsprechen (z. B. Jahr 2026, kostenlos/free, Mindestanzahl an Tracks).
-Diese Liste kann im Anschluss z.B. mit bcdl heruntergeladen werden.
+A Python Streamlit application to filter Bandcamp URLs and find exact high-resolution matches on Qobuz.
+
+This tool helps you:
+- Filter Bandcamp URLs based on various criteria (genre, location, track count, pricing).
+- Scrape metadata from filtered Bandcamp releases.
+- Search for matching albums on Qobuz.
+- Export Qobuz links for matched albums.
 
 ## 🚀 Funktionen
 
-- **GUI-Oberfläche**: Oberfläche mit Tkinter/CustomTkinter.
-- **Zwei Betriebsmodi**:
-  - **Import**: Verarbeitet eine bestehende Logdatei und exportiert die Ergebnisse.
-  - **Monitor**: Überwacht eine Logdatei in Echtzeit auf neue Einträge.
-- **Umfangreiche Filter**:
-  - Filterung nach Bandcamp-URLs.
-  - Automatische Filterung nach Releases aus **2026**.
-  - Filterung nach **kostenlosen** ("free") Releases.
-  - Einstellbare Mindest- und Maximalanzahl an **Tracks**.
-  - Einstellbare Mindest- und Maximaldauer (**Minuten**).
-- **Intelligenter Export**:
-  - Vermeidung von Duplikaten.
-  - Optionale Beschreibung an URLs anhängen (wird in einer neuen Zeile unter der URL ausgegeben, kompatibel mit `bcdl`).
-  - Anpassbare Dateinamen mit optionalen Filter-Infos im Namen.
-  - Filterung nach Zeitstempel (nur neue Einträge seit dem letzten Export).
-- **Statistiken & Dry-Run**: "Search / Dry Run" Funktion, um Treffer zu zählen, ohne eine Datei zu schreiben.
+- **Web-UI (Streamlit)**: User-friendly interface for easy interaction.
+- **Bandcamp URL Filtering**: Filter input URLs by genre/tag, location, minimum/maximum track count, and pricing (free/paid/all).
+- **Bandcamp Metadata Scraping**: Automatically fetches artist, album title, track count, etc., from Bandcamp pages.
+- **Qobuz Matching**: Searches Qobuz for exact matches based on Bandcamp metadata.
+- **Fuzzy Matching**: Uses `rapidfuzz` for robust artist and album title matching.
+- **Export Qobuz Links**: Download a `.txt` file containing all matched Qobuz URLs.
+- **Dry Run Mode**: Apply Bandcamp filters without performing Qobuz searches, useful for quick filtering.
 
 ## 🛠️ Installation
 
 ### Voraussetzungen
 - Python 3.10 oder höher
+- `pip` Paketmanager
 
 ### Schritte
 1. Repository klonen oder herunterladen:
@@ -34,30 +31,25 @@ Diese Liste kann im Anschluss z.B. mit bcdl heruntergeladen werden.
    cd Bandcamp_urlFilter
    ```
 
-2. Virtuelle Umgebung erstellen (empfohlen):
+2. Virtuelle Umgebung erstellen und aktivieren (empfohlen):
    ```bash
    python -m venv .venv
    source .venv/bin/activate  # Unter Windows: .venv\Scripts\activate
    ```
 
 3. Abhängigkeiten installieren:
-   Das Projekt verwendet Standard-Python-Bibliotheken und `tkinter`. Falls zusätzliche Pakete benötigt werden, können diese via `pip` installiert werden.
+   ```bash
+   pip install -r requirements.txt
+   ```
+   (Sie müssen möglicherweise eine `requirements.txt` Datei erstellen, die `streamlit`, `pandas`, `aiohttp`, `rapidfuzz`, `python-dotenv` enthält.)
 
 ## 📖 Nutzung
 
-1. Starten Sie das Programm über die `run.bat` (Windows) oder direkt via Python:
+1. Starten Sie die Streamlit-Anwendung:
    ```bash
-   python main.py
+   python -m streamlit run app.py
    ```
-2. **Log-Datei auswählen**: Wählen Sie die IRC-Logdatei aus, die gescannt werden soll.
-3. **Ausgabeordner wählen**: Legen Sie fest, wo die gefilterten Links gespeichert werden sollen.
-4. **Filter einstellen**: Geben Sie bei Bedarf Min/Max Tracks oder Dauer ein.
-## 📂 Projektstruktur
-
-- `core/`: Business-Logik (Filter, Parser, Services, Einstellungen).
-- `gui/`: Benutzeroberfläche (`main_window.py`).
-- `tests/`: Automatisierte Tests für Parser und Services.
-- `scripts/`: Hilfsskripte für die Entwicklung.
-- `main.py`: Haupteinstiegspunkt der Anwendung.
-- `run.bat`: Windows-Batchdatei zum einfachen Starten.
-- `requirements.txt`: Übersicht der Abhängigkeiten (aktuell nur Standardbibliothek).
+2. Die Anwendung öffnet sich automatisch in Ihrem Webbrowser.
+3. Laden Sie eine `.txt`-Datei mit Bandcamp-URLs hoch.
+4. Konfigurieren Sie die Filter in der Seitenleiste.
+5. Klicken Sie auf "Process", um die URLs zu filtern und Qobuz-Matches zu finden.
