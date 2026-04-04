@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import os
 import asyncio
 from datetime import date
 import aiohttp
@@ -15,15 +16,42 @@ st.set_page_config(page_title="Bandcamp to Qobuz Matcher", layout="wide")
 st.title("🎵 Bandcamp to Qobuz Matcher")
 st.markdown("Filter your Bandcamp URLs and find exact high-resolution matches on Qobuz.")
 
+if "results" not in st.session_state:
+    st.session_state.results = []
+if "process_complete" not in st.session_state:
+    st.session_state.process_complete = False
+
 # Sidebar Configuration
 st.sidebar.header("Filter Configuration")
 
 tag_input = st.sidebar.text_input("🏷️ Genre / Tag", value="", help="Filter by Tag or Genre")
-location_input = st.sidebar.text_input("📍 Location", value="", help="Filter by Location parsing")
 min_tracks = st.sidebar.number_input("🔢 Min Tracks", min_value=1, value=None, step=1, help="Leave empty for no minimum")
 max_tracks = st.sidebar.number_input("🔢 Max Tracks", min_value=1, value=None, step=1, help="Leave empty for no maximum")
 min_duration = st.sidebar.number_input("⏱️ Min Duration (min)", min_value=1, value=None, step=1, help="Leave empty for no minimum")
 max_duration = st.sidebar.number_input("⏱️ Max Duration (min)", min_value=1, value=None, step=1, help="Leave empty for no maximum")
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("⚙️ Settings")
+if st.sidebar.button("📝 Open .env File for Qobuz Token -> see README.md"):
+    env_path = ".env"
+    if not os.path.exists(env_path):
+        template = """# Wichtig: Damit Python die lokalen Verzeichnisse (z.B. logic, core) als Module erkennt
+PYTHONPATH=.
+# Optional: Setze deine eigene Qobuz App ID (Standard ist ein offener Web-Client 100000000)
+QOBUZ_APP_ID=100000000
+# Erforderlich (je nach Region/Account-Typ): Setze deinen User Auth Token für Qobuz
+QOBUZ_USER_AUTH_TOKEN="""
+        try:
+            with open(env_path, "w", encoding="utf-8") as f:
+                f.write(template)
+        except Exception as e:
+            st.sidebar.error(f"Fehler beim Erstellen der .env Datei: {e}")
+
+    try:
+        # Windows command to open a file with its default associated program
+        os.startfile(env_path)
+    except Exception as e:
+        st.sidebar.error(f"Konnte .env nicht öffnen: {e}")
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📅 Release Date")
@@ -45,7 +73,6 @@ def get_download_link(data_list: List[dict]) -> str:
 async def process_urls(lines: List[str]):
     filter_config = {
         "tag": tag_input,
-        "location": location_input,
         "min_tracks": int(min_tracks) if min_tracks else None,
         "max_tracks": int(max_tracks) if max_tracks else None,
         "min_duration": int(min_duration) if min_duration else None,
@@ -103,8 +130,11 @@ async def process_urls(lines: List[str]):
         )
         return
 
+    # Reset session state for a new run
+    st.session_state.results = []
+    st.session_state.process_complete = False
+
     # 2. Process
-    results = []
     total = len(filtered_entries)
     
     # Run async sessions
@@ -118,7 +148,7 @@ async def process_urls(lines: List[str]):
                 match_data = await match_album(session, bc_data)
                 
                 if match_data.get("status") == "matched":
-                    results.append({
+                    st.session_state.results.append({
                         "Artist": bc_data.get("artist"),
                         "Album": bc_data.get("album"),
                         "Bandcamp Link": bc_data.get("url"),
@@ -126,7 +156,7 @@ async def process_urls(lines: List[str]):
                         "Status": "✅ Matched"
                     })
                 else:
-                    results.append({
+                    st.session_state.results.append({
                         "Artist": bc_data.get("artist"),
                         "Album": bc_data.get("album"),
                         "Bandcamp Link": bc_data.get("url"),
@@ -134,7 +164,7 @@ async def process_urls(lines: List[str]):
                         "Status": "❌ No Match on Qobuz"
                     })
             else:
-                results.append({
+                st.session_state.results.append({
                     "Artist": entry.artist,
                     "Album": entry.title,
                     "Bandcamp Link": entry.url,
@@ -144,32 +174,17 @@ async def process_urls(lines: List[str]):
                 
             progress_bar.progress((i + 1) / total)
             
-    log_area.text(f"Complete! We found {len([r for r in results if r['Qobuz Link']])} out of {total} matches.")
-    
-    if results:
-        df = pd.DataFrame(results)
-        
-        # UI DataFrame configuration
-        st.dataframe(
-            df,
-            column_config={
-                "Bandcamp Link": st.column_config.LinkColumn("Bandcamp URL"),
-                "Qobuz Link": st.column_config.LinkColumn("Qobuz URL")
-            },
-            use_container_width=True
-        )
-        
-        # Download button
-        qobuz_strings = get_download_link([{"qobuz_url": r["Qobuz Link"]} for r in results])
-        st.download_button(
-            label="Download Qobuz Links (.txt)",
-            data=qobuz_strings,
-            file_name="qobuz_exports.txt",
-            mime="text/plain"
-        )
+    st.session_state.process_complete = True
+    log_area.text(f"Complete! We found {len([r for r in st.session_state.results if r['Qobuz Link']])} out of {total} matches.")
         
 
-if st.button("Process", type="primary"):
+col1, col2 = st.columns([1, 5])
+with col1:
+    process_btn = st.button("Process", type="primary")
+with col2:
+    st.button("Stop / Cancel", help="Bricht die aktuelle Suche ab und zeigt die bisherigen Ergebnisse.")
+
+if process_btn:
     if uploaded_file is not None:
         # To convert to a list of strings
         stringio = StringIO(uploaded_file.getvalue().decode("utf-8"))
@@ -180,3 +195,32 @@ if st.button("Process", type="primary"):
         asyncio.run(process_urls(lines))
     else:
         st.error("Please upload a .txt or .log file first.")
+
+# Show results outside the process function so they persist after cancellation
+if not dry_run and st.session_state.results:
+    st.markdown("---")
+    st.subheader("📊 Results")
+    
+    if not st.session_state.process_complete:
+        st.warning("⚠️ Processing was cancelled or interrupted. Showing partial results.")
+    else:
+        st.success("✅ Processing complete.")
+    
+    df = pd.DataFrame(st.session_state.results)
+    
+    st.dataframe(
+        df,
+        column_config={
+            "Bandcamp Link": st.column_config.LinkColumn("Bandcamp URL"),
+            "Qobuz Link": st.column_config.LinkColumn("Qobuz URL")
+        },
+        use_container_width=True
+    )
+    
+    qobuz_strings = get_download_link([{"qobuz_url": r["Qobuz Link"]} for r in st.session_state.results])
+    st.download_button(
+        label="Download Qobuz Links (.txt)",
+        data=qobuz_strings,
+        file_name="qobuz_exports.txt",
+        mime="text/plain"
+    )
