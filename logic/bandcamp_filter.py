@@ -5,8 +5,12 @@ from datetime import datetime, date
 
 ANSI_ESCAPE_PATTERN = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 LOG_LINE_PATTERN = re.compile(
-    r'^\s*\[(.*?)\]\s+<([^>]+)>\s*(?:\d+)?\s*<(http[^>]+)>\s+(.*?)?\s*-\s*(.*?)?\s*(?:\d+)?\s*\[([^\]]*)\](?:\s+.*)?$'
+    r'^\s*\[(.*?)\]\s+<([^>]+)>\s*(?:\d+)?\s*<(http[^>]+)>\s+(.*?)?\s*-\s*(.*?)?\s*\[([^\]]*)\](?:\s+.*)?$'
 )
+LOG_LINE_PATTERN_ALT = re.compile(
+    r'^\s*(\d{1,2}:\d{2}(?::\d{2})?)\s+<([^>]+)>\s*(?:\d+)?\s*<(http[^>]+)>\s+(.*?)?\s*-\s*(.*?)?\s*\[([^\]]*)\](?:\s+.*)?$'
+)
+URL_ONLY_PATTERN = re.compile(r'^\s*(https?://[^\s]+)\s*$')
 
 @dataclass
 class LogEntry:
@@ -48,10 +52,26 @@ def parse_duration(duration_str: str) -> Optional[int]:
 def parse_line(line: str) -> Optional[LogEntry]:
     clean_line = clean_ansi(line).strip()
     if clean_line.startswith('***'): return None
-        
+
     match = LOG_LINE_PATTERN.match(clean_line)
-    if not match: return None
-        
+    if not match:
+        match = LOG_LINE_PATTERN_ALT.match(clean_line)
+
+    if not match:
+        url_match = URL_ONLY_PATTERN.match(clean_line)
+        if not url_match:
+            return None
+        url = url_match.group(1).strip()
+        return LogEntry(
+            timestamp="",
+            user="",
+            url=url,
+            artist="",
+            title="",
+            meta_raw="",
+            original_line=line.strip()
+        )
+
     timestamp, user, url, artist, title, meta_raw = match.groups()
     
     entry = LogEntry(
@@ -128,10 +148,10 @@ def filter_entries(lines: List[str], filters: Dict[str, Any]) -> List[LogEntry]:
             continue
 
         if free_mode in ["free", "paid"]:
-            is_free = entry.free_flag.lower() == 'free' or 'free' in meta_lower
-            if free_mode == "free" and not is_free:
+            flag = entry.free_flag.strip().lower()
+            if free_mode == "free" and flag != "free":
                 continue
-            if free_mode == "paid" and is_free:
+            if free_mode == "paid" and flag != "paid":
                 continue
 
         results.append(entry)
