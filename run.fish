@@ -10,16 +10,18 @@ end
 if not test -d .venv/bin
     echo "Creating virtual environment..."
     python -m venv .venv; or exit 1
-    echo "Activating virtual environment..."
-    source .venv/bin/activate.fish
-    echo "Installing dependencies..."
-    python -m pip install --upgrade pip; or exit 1
-    python -m pip install -r requirements.txt; or exit 1
-else if test -f .venv/bin/activate.fish
+end
+
+echo "Activating virtual environment..."
+if test -f .venv/bin/activate.fish
     source .venv/bin/activate.fish
 else
     source .venv/bin/activate
 end
+
+echo "Checking dependencies (quiet mode)..."
+python -m pip install --disable-pip-version-check -q --upgrade pip; or exit 1
+python -m pip install --disable-pip-version-check -q -r requirements.txt; or exit 1
 
 echo "Checking Qobuz environment variables (optional for Dry Run)..."
 python - <<'PY'

@@ -5,12 +5,13 @@ import aiohttp
 import logging
 
 logger = logging.getLogger(__name__)
+REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=10)
 
 async def fetch_with_retries(session: aiohttp.ClientSession, url: str, max_retries: int = 3, base_delay: float = 2.0) -> str:
     """Fetches text with exponential backoff on failure."""
     for attempt in range(max_retries):
         try:
-            async with session.get(url, timeout=10) as response:
+            async with session.get(url, timeout=REQUEST_TIMEOUT) as response:
                 if response.status == 200:
                     return await response.text()
                 elif response.status in (429, 500, 502, 503, 504):
@@ -43,7 +44,11 @@ async def scrape_bandcamp_metadata(url: str, session: aiohttp.ClientSession) -> 
         # Look for the JSON-LD script tag
         ld_json_tag = soup.find('script', type='application/ld+json')
         if ld_json_tag:
-            data = json.loads(ld_json_tag.string)
+            raw_json = ld_json_tag.string or ld_json_tag.get_text(strip=True)
+            if not raw_json:
+                return {"status": "json_ld_not_found", "url": url}
+
+            data = json.loads(raw_json)
             
             # The structure might be a list or a dict
             items = data if isinstance(data, list) else [data]

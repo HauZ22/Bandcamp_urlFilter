@@ -5,7 +5,10 @@ from datetime import datetime, date
 
 ANSI_ESCAPE_PATTERN = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 LOG_LINE_PATTERN = re.compile(
-    r'^\s*\[(.*?)\]\s+<([^>]+)>\s*(?:\d+)?\s*<(http[^>]+)>\s+(.*?)?\s*-\s*(.*?)?\s*(?:\d+)?\s*\[([^\]]*)\](?:\s+.*)?$'
+    r'^\s*\[(.*?)\]\s+<([^>]+)>\s*(?:\d+)?\s*<(http[^>]+)>\s+(.*?)?\s*-\s*(.*?)?\s*\[([^\]]*)\](?:\s+.*)?$'
+)
+LOG_LINE_PATTERN_ALT = re.compile(
+    r'^\s*(\d{1,2}:\d{2}(?::\d{2})?)\s+<([^>]+)>\s*(?:\d+)?\s*<(http[^>]+)>\s+(.*?)?\s*-\s*(.*?)?\s*\[([^\]]*)\](?:\s+.*)?$'
 )
 URL_ONLY_PATTERN = re.compile(r'^\s*(https?://[^\s]+)\s*$')
 
@@ -51,6 +54,9 @@ def parse_line(line: str) -> Optional[LogEntry]:
     if clean_line.startswith('***'): return None
 
     match = LOG_LINE_PATTERN.match(clean_line)
+    if not match:
+        match = LOG_LINE_PATTERN_ALT.match(clean_line)
+
     if not match:
         url_match = URL_ONLY_PATTERN.match(clean_line)
         if not url_match:

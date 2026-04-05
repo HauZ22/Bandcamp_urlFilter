@@ -91,3 +91,4 @@ Then run `./run.command` again (or double-click it in Finder).
 
 - After processing, use the export feature to write Qobuz links to `/exports/`.
 - The app generates both `run_rip.bat` and `run_rip.sh` so Windows, Linux, and macOS users can run the downloader script.
+- `streamrip` is included in `requirements.txt`; if not installed yet, run `pip install -r requirements.txt`.

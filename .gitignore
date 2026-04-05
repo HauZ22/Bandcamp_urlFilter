@@ -44,3 +44,4 @@ settings.json
 !requirements.txt
 run_rip.bat
 .codex
+exports/streamrip_last.log

@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 logger = logging.getLogger(__name__)
 load_dotenv()
 _AUTO_DISCOVERED_APP_ID: str = ""
+REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=10)
 
 
 async def _auto_discover_qobuz_app_id(session: aiohttp.ClientSession) -> str:
@@ -17,7 +18,7 @@ async def _auto_discover_qobuz_app_id(session: aiohttp.ClientSession) -> str:
         return _AUTO_DISCOVERED_APP_ID
 
     try:
-        async with session.get("https://play.qobuz.com/", timeout=10) as response:
+        async with session.get("https://play.qobuz.com/", timeout=REQUEST_TIMEOUT) as response:
             if response.status != 200:
                 return ""
             html = await response.text()
@@ -30,7 +31,7 @@ async def _auto_discover_qobuz_app_id(session: aiohttp.ClientSession) -> str:
 
     bundle_url = f"https://play.qobuz.com{bundle_match.group(1)}"
     try:
-        async with session.get(bundle_url, timeout=10) as response:
+        async with session.get(bundle_url, timeout=REQUEST_TIMEOUT) as response:
             if response.status != 200:
                 return ""
             js = await response.text()
@@ -80,7 +81,9 @@ async def search_qobuz(
     
     for attempt in range(max_retries):
         try:
-            async with session.get(url, params=params, headers=headers, timeout=10) as response:
+            async with session.get(
+                url, params=params, headers=headers, timeout=REQUEST_TIMEOUT
+            ) as response:
                 if response.status == 200:
                     data = await response.json()
                     return data

@@ -11,16 +11,15 @@ fi
 if [ ! -d ".venv/bin" ]; then
   echo "Creating virtual environment..."
   python -m venv .venv
-  echo "Activating virtual environment..."
-  # shellcheck source=/dev/null
-  source .venv/bin/activate
-  echo "Installing dependencies..."
-  python -m pip install --upgrade pip
-  python -m pip install -r requirements.txt
-else
-  # shellcheck source=/dev/null
-  source .venv/bin/activate
 fi
+
+echo "Activating virtual environment..."
+# shellcheck source=/dev/null
+source .venv/bin/activate
+
+echo "Checking dependencies (quiet mode)..."
+python -m pip install --disable-pip-version-check -q --upgrade pip
+python -m pip install --disable-pip-version-check -q -r requirements.txt
 
 echo "Checking Qobuz environment variables (optional for Dry Run)..."
 python - <<'PY'
