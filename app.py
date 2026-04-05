@@ -1,281 +1,208 @@
-import streamlit as st
-import pandas as pd
 import os
-import asyncio
-from datetime import date
-import aiohttp
-from io import StringIO
-from typing import List
 
-from logic.bandcamp_filter import filter_entries
-from logic.metadata_scraper import scrape_bandcamp_metadata
-from logic.qobuz_matcher import match_album
+import streamlit as st
+from dotenv import load_dotenv
+
+from app_modules.filtering import validate_filters
+from app_modules.streamrip import (
+    CODEC_OPTIONS,
+    QUALITY_OPTIONS,
+    ensure_streamrip_config_file,
+    format_quality_option,
+    get_env_qobuz_values,
+    get_streamrip_config_path,
+    load_streamrip_settings,
+    save_streamrip_settings,
+)
+from app_modules.system_utils import open_in_default_app
+from app_modules.ui_processing import (
+    handle_process_submission,
+    render_results_and_exports,
+    render_status_log,
+    run_processing_tick,
+)
+from app_modules.ui_state import init_session_state
+from app_modules.ui_streamrip_setup import init_streamrip_download_state, render_streamrip_setup
+
+load_dotenv()
 
 st.set_page_config(page_title="Bandcamp to Qobuz Matcher", layout="wide")
-
 st.title("🎵 Bandcamp to Qobuz Matcher")
 st.markdown("Filter your Bandcamp URLs and find exact high-resolution matches on Qobuz.")
 
-if "results" not in st.session_state:
-    st.session_state.results = []
-if "process_complete" not in st.session_state:
-    st.session_state.process_complete = False
-if "export_done" not in st.session_state:
-    st.session_state.export_done = False
+init_session_state()
 
-# Sidebar Configuration
-st.sidebar.header("Filter Configuration")
+st.sidebar.header("Configuration")
 
-tag_input = st.sidebar.text_input("🏷️ Genre / Tag", value="", help="Filter by Tag or Genre")
-min_tracks = st.sidebar.number_input("🔢 Min Tracks", min_value=1, value=None, step=1, help="Leave empty for no minimum")
-max_tracks = st.sidebar.number_input("🔢 Max Tracks", min_value=1, value=None, step=1, help="Leave empty for no maximum")
-min_duration = st.sidebar.number_input("⏱️ Min Duration (min)", min_value=1, value=None, step=1, help="Leave empty for no minimum")
-max_duration = st.sidebar.number_input("⏱️ Max Duration (min)", min_value=1, value=None, step=1, help="Leave empty for no maximum")
+with st.sidebar.expander("🎯 Filter Rules", expanded=True):
+    tag_input = st.text_input("Genre / Tag", value="", help="Filter by tag or genre.")
+    location_input = st.text_input("Location", value="", help="Filter by location text in metadata.")
+    min_tracks = st.number_input("Min Tracks", min_value=1, value=None, step=1, help="Leave empty for no minimum.")
+    max_tracks = st.number_input("Max Tracks", min_value=1, value=None, step=1, help="Leave empty for no maximum.")
+    min_duration = st.number_input("Min Duration (min)", min_value=1, value=None, step=1, help="Leave empty for no minimum.")
+    max_duration = st.number_input("Max Duration (min)", min_value=1, value=None, step=1, help="Leave empty for no maximum.")
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("⚙️ Settings")
-if st.sidebar.button("📝 Open .env File for Qobuz Token -> see README.md"):
-    env_path = ".env"
-    if not os.path.exists(env_path):
-        template = """# Important: So that Python recognizes local directories (e.g., logic) as modules
+with st.sidebar.expander("📅 Release Date", expanded=False):
+    start_date = st.date_input("Start Date", value=None, help="Filter for releases on or after this date.")
+    end_date = st.date_input("End Date", value=None, help="Filter for releases on or before this date.")
+
+with st.sidebar.expander("⚙️ Run Settings", expanded=True):
+    free_mode = st.selectbox("Pricing", options=["All", "Free", "Paid"], index=0)
+    dry_run = st.checkbox("Dry Run", value=False, help="Only apply Bandcamp filter, skip Qobuz search.")
+    if st.button("📝 Open .env for Qobuz Token"):
+        env_path = ".env"
+        if not os.path.exists(env_path):
+            template = """# Important: So that Python recognizes local directories (e.g., logic) as modules
 PYTHONPATH=.
-# Optional: Set your own Qobuz App ID (default is an open web client 100000000)
-QOBUZ_APP_ID=100000000
+# Optional: Set your own Qobuz App ID (if omitted, the app auto-fetches it from Qobuz Web Player)
+# QOBUZ_APP_ID=
 # Required (depending on region/account type): Set your user Auth Token for Qobuz
 QOBUZ_USER_AUTH_TOKEN="""
+            try:
+                with open(env_path, "w", encoding="utf-8") as f:
+                    f.write(template)
+            except Exception as e:
+                st.error(f"Error creating the .env file: {e}")
+
         try:
-            with open(env_path, "w", encoding="utf-8") as f:
-                f.write(template)
+            open_in_default_app(env_path)
         except Exception as e:
-            st.sidebar.error(f"Error creating the .env file: {e}")
+            st.error(f"Could not open .env: {e}")
 
-    try:
-        # Windows command to open a file with its default associated program
-        os.startfile(env_path)
-    except Exception as e:
-        st.sidebar.error(f"Could not open .env: {e}")
+streamrip_config_path = get_streamrip_config_path()
+streamrip_config_ready, streamrip_config_init_msg = ensure_streamrip_config_file(streamrip_config_path)
+streamrip_settings = {}
+streamrip_settings_error = ""
+if streamrip_config_ready:
+    streamrip_settings, streamrip_settings_error = load_streamrip_settings(streamrip_config_path)
+env_qobuz_app_id, env_qobuz_token = get_env_qobuz_values()
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("📅 Release Date")
-start_date = st.sidebar.date_input("Start Date", value=None, help="Filter for releases on or after this date.")
-end_date = st.sidebar.date_input("End Date", value=None, help="Filter for releases on or before this date.")
-st.sidebar.markdown("---")
-
-free_mode = st.sidebar.selectbox("💸 Pricing", options=["All", "Free", "Paid"], index=0)
-
-dry_run = st.sidebar.checkbox("🏜️ Dry Run", value=False, help="Only apply Bandcamp filter, skip Qobuz search")
-
-uploaded_file = st.file_uploader("Upload .txt or .log file with Bandcamp URLs", type=['txt', 'log'])
-
-def get_download_link(data_list: List[dict]) -> str:
-    # Extracts the qobuz URLs to export file
-    qobuz_urls = [d["qobuz_url"] for d in data_list if d.get("qobuz_url")]
-    return "\n".join(qobuz_urls)
-
-async def process_urls(lines: List[str]):
-    filter_config = {
-        "tag": tag_input,
-        "min_tracks": int(min_tracks) if min_tracks else None,
-        "max_tracks": int(max_tracks) if max_tracks else None,
-        "min_duration": int(min_duration) if min_duration else None,
-        "max_duration": int(max_duration) if max_duration else None,
-        "free_mode": free_mode
-    }
-    
-    st.write("### Status Log")
-    log_area = st.empty()
-    progress_bar = st.progress(0)
-    
-    # 1. Filter
-    log_area.text("Applying filters...")
-    filtered_entries = filter_entries(lines, filter_config)
-    
-    # Post-filter for date range
-    if start_date or end_date:
-        date_filtered_entries = []
-        for entry in filtered_entries:
-            if not entry.release_date:
-                continue
-            
-            start_ok = not start_date or entry.release_date >= start_date
-            end_ok = not end_date or entry.release_date <= end_date
-
-            if start_ok and end_ok:
-                date_filtered_entries.append(entry)
-        
-        filtered_entries = date_filtered_entries
-
-    log_area.text(f"Found {len(filtered_entries)} URLs matching your filters out of {len(lines)} total lines.")
-
-    if not filtered_entries:
-        st.warning("No URLs matched the filter criteria.")
-        return
-        
-    if dry_run:
-        st.info("Dry Run enabled. Qobuz matching skipped. Showing filtered URLs:")
-        df = pd.DataFrame([{ "Bandcamp URL": e.url, "Artist": e.artist, "Title": e.title, "Genre": e.genre, "Tracks": e.track_count, "Duration (min)": e.duration_min } for e in filtered_entries])
-        st.dataframe(
-            df,
-            column_config={
-                "Bandcamp URL": st.column_config.LinkColumn()
-            },
-            use_container_width=True
+if streamrip_config_ready and streamrip_settings and env_qobuz_token:
+    needs_token = not str(streamrip_settings.get("password_or_token", "")).strip()
+    needs_app_id = bool(env_qobuz_app_id) and not str(streamrip_settings.get("app_id", "")).strip()
+    if needs_token or needs_app_id:
+        _ok, _msg = save_streamrip_settings(
+            streamrip_config_path,
+            use_auth_token=True,
+            email_or_userid=str(streamrip_settings.get("email_or_userid", "")),
+            password_or_token=env_qobuz_token,
+            app_id=env_qobuz_app_id or str(streamrip_settings.get("app_id", "")),
+            quality=int(streamrip_settings.get("quality", 3)),
+            codec_selection=str(streamrip_settings.get("codec_selection", "Original")),
+            downloads_folder=str(streamrip_settings.get("downloads_folder", "")),
         )
-        
-        # Download button for filtered Bandcamp URLs
-        bc_urls = "\n".join([e.url for e in filtered_entries if e.url])
-        st.download_button(
-            label="Download Filtered Bandcamp Links (.txt)",
-            data=bc_urls,
-            file_name="filtered_bandcamp_urls.txt",
-            mime="text/plain"
-        )
-        return
+        if _ok:
+            streamrip_settings, streamrip_settings_error = load_streamrip_settings(streamrip_config_path)
 
-    # Reset session state for a new run
-    st.session_state.results = []
-    st.session_state.process_complete = False
-    st.session_state.export_done = False
+if streamrip_config_init_msg:
+    st.sidebar.info(streamrip_config_init_msg)
+if streamrip_settings_error:
+    st.sidebar.warning(streamrip_settings_error)
 
-    # 2. Process
-    total = len(filtered_entries)
-    
-    # Run async sessions
-    async with aiohttp.ClientSession() as session:
-        for i, entry in enumerate(filtered_entries):
-            log_area.text(f"[{i+1}/{total}] Fetching Bandcamp Metadata for {entry.url}...")
-            bc_data = await scrape_bandcamp_metadata(entry.url, session)
-            
-            if bc_data.get("status") == "success":
-                log_area.text(f"[{i+1}/{total}] Searching Qobuz for {bc_data.get('artist')} - {bc_data.get('album')}...")
-                match_data = await match_album(session, bc_data)
-                
-                if match_data.get("status") == "matched":
-                    st.session_state.results.append({
-                        "Artist": bc_data.get("artist"),
-                        "Album": bc_data.get("album"),
-                        "Bandcamp Link": bc_data.get("url"),
-                        "Qobuz Link": match_data.get("qobuz_url"),
-                        "Status": "✅ Matched"
-                    })
-                else:
-                    st.session_state.results.append({
-                        "Artist": bc_data.get("artist"),
-                        "Album": bc_data.get("album"),
-                        "Bandcamp Link": bc_data.get("url"),
-                        "Qobuz Link": "",
-                        "Status": "❌ No Match on Qobuz"
-                    })
-            else:
-                st.session_state.results.append({
-                    "Artist": entry.artist,
-                    "Album": entry.title,
-                    "Bandcamp Link": entry.url,
-                    "Qobuz Link": "",
-                    "Status": "⚠️ Error scraping Bandcamp"
-                })
-                
-            progress_bar.progress((i + 1) / total)
-            
-    st.session_state.process_complete = True
-    log_area.text(f"Complete! We found {len([r for r in st.session_state.results if r['Qobuz Link']])} out of {total} matches.")
-        
+default_rip_quality = int(streamrip_settings.get("quality", 3)) if streamrip_settings else 3
+if default_rip_quality not in QUALITY_OPTIONS:
+    default_rip_quality = 3
 
-col1, col2 = st.columns([1, 5])
+default_codec = str(streamrip_settings.get("codec_selection", "Original")) if streamrip_settings else "Original"
+if default_codec not in CODEC_OPTIONS:
+    default_codec = "Original"
+
+default_downloads_folder = str(streamrip_settings.get("downloads_folder", "")).strip() if streamrip_settings else ""
+init_streamrip_download_state(default_downloads_folder)
+
+with st.sidebar.expander("⚙️ Streamrip Settings", expanded=False):
+    rip_quality = st.selectbox(
+        "Rip Quality",
+        options=QUALITY_OPTIONS,
+        index=QUALITY_OPTIONS.index(default_rip_quality),
+        format_func=format_quality_option,
+        help="Applied to rip commands (equivalent to --quality).",
+    )
+    rip_codec = st.selectbox(
+        "Rip Codec",
+        options=CODEC_OPTIONS,
+        index=CODEC_OPTIONS.index(default_codec),
+        help="Applied to rip commands (equivalent to --codec). Use Original for no conversion flag.",
+    )
+    st.caption("Qobuz and Tidal ripping requires a premium subscription.")
+
+uploaded_file = st.file_uploader("Upload .txt or .log file with Bandcamp URLs", type=["txt", "log"])
+
+has_streamrip_identifier = bool(str(streamrip_settings.get("email_or_userid", "")).strip())
+has_streamrip_token = bool(str(streamrip_settings.get("password_or_token", "")).strip())
+streamrip_needs_setup = (
+    not streamrip_config_ready
+    or not streamrip_settings
+    or not (has_streamrip_identifier and has_streamrip_token)
+)
+
+render_streamrip_setup(
+    streamrip_needs_setup=streamrip_needs_setup,
+    streamrip_config_path=streamrip_config_path,
+    streamrip_config_ready=streamrip_config_ready,
+    streamrip_settings=streamrip_settings,
+    default_rip_quality=default_rip_quality,
+    default_codec=default_codec,
+    env_qobuz_app_id=env_qobuz_app_id,
+    env_qobuz_token=env_qobuz_token,
+)
+
+validation_errors = validate_filters(
+    min_tracks,
+    max_tracks,
+    min_duration,
+    max_duration,
+    start_date,
+    end_date,
+)
+if validation_errors:
+    for err in validation_errors:
+        st.error(err)
+
+filter_config = {
+    "tag": tag_input,
+    "location": location_input,
+    "min_tracks": int(min_tracks) if min_tracks else None,
+    "max_tracks": int(max_tracks) if max_tracks else None,
+    "min_duration": int(min_duration) if min_duration else None,
+    "max_duration": int(max_duration) if max_duration else None,
+    "free_mode": free_mode,
+}
+
+col1, col2, col3 = st.columns([1.2, 1.6, 4])
 with col1:
-    process_btn = st.button("Process", type="primary")
+    process_btn = st.button("Process", type="primary", disabled=bool(validation_errors))
 with col2:
-    st.button("Stop / Cancel", help="Cancels the current search and displays the results so far.")
-
-if process_btn:
-    if uploaded_file is not None:
-        # To convert to a list of strings
-        stringio = StringIO(uploaded_file.getvalue().decode("utf-8"))
-        lines = stringio.readlines()
-        
-        # Because Streamlit doesn't support async event loops natively in its top level without a workaround,
-        # we can use asyncio.run to kick it off
-        asyncio.run(process_urls(lines))
-    else:
-        st.error("Please upload a .txt or .log file first.")
-
-# Show results outside the process function so they persist after cancellation
-if not dry_run and st.session_state.results:
-    st.markdown("---")
-    st.subheader("📊 Results")
-    
-    if not st.session_state.process_complete:
-        st.warning("⚠️ Processing was cancelled or interrupted. Showing partial results.")
-    else:
-        st.success("✅ Processing complete.")
-    
-    df = pd.DataFrame(st.session_state.results)
-    
-    st.dataframe(
-        df,
-        column_config={
-            "Bandcamp Link": st.column_config.LinkColumn("Bandcamp URL"),
-            "Qobuz Link": st.column_config.LinkColumn("Qobuz URL")
-        },
-        use_container_width=True
+    auto_rip_after_export = st.toggle(
+        "Auto rip after export",
+        value=False,
+        help="Automatically run streamrip after exporting this run's Qobuz results.",
     )
-    
-    qobuz_strings = get_download_link([{"qobuz_url": r["Qobuz Link"]} for r in st.session_state.results])
-    st.download_button(
-        label="Download Qobuz Links (.txt)",
-        data=qobuz_strings,
-        file_name="qobuz_exports.txt",
-        mime="text/plain"
+with col3:
+    stop_btn = st.button(
+        "Stop / Cancel",
+        help="Stops after the current in-flight batch and shows partial results.",
+        disabled=not st.session_state.processing,
     )
 
-    st.markdown("---")
-    st.subheader("💾 Local Export & Batch Generator")
-    st.markdown("Split Qobuz links into multiple text files and generate a batch downloader script.")
-    
-    col_exp1, col_exp2 = st.columns([1, 2])
-    with col_exp1:
-        max_links = st.number_input("Max links per file", min_value=1, value=10, step=1)
-        export_btn = st.button("Export to Local Disk", type="primary")
-        
-    with col_exp2:
-        if export_btn:
-            try:
-                valid_urls = [r["Qobuz Link"] for r in st.session_state.results if r["Qobuz Link"]]
-                if not valid_urls:
-                    st.warning("No valid Qobuz links to export.")
-                else:
-                    export_dir = os.path.abspath("exports")
-                    os.makedirs(export_dir, exist_ok=True)
-                    
-                    batch_files = []
-                    total_batches = (len(valid_urls) + max_links - 1) // max_links
-                    
-                    for i in range(total_batches):
-                        batch_urls = valid_urls[i * max_links : (i + 1) * max_links]
-                        batch_num = f"{i + 1:02d}"
-                        filename = f"qobuz_batch_{batch_num}.txt"
-                        filepath = os.path.join(export_dir, filename)
-                        
-                        with open(filepath, "w", encoding="utf-8") as f:
-                            f.write("\n".join(batch_urls) + "\n")
-                            
-                        batch_files.append(filename)
-                        
-                    bat_path = os.path.abspath("run_rip.bat")
-                    with open(bat_path, "w", encoding="utf-8") as f:
-                        f.write("@echo off\n")
-                        for fname in batch_files:
-                            f.write(f"call rip file exports/{fname}\n")
-                        f.write("pause\n")
-                        
-                    st.success(f"Successfully created {total_batches} batch file(s) in `/exports/` and generated `run_rip.bat`.")
-                    st.session_state.export_done = True
-            except Exception as e:
-                st.error(f"Error during export: {e}")
-                
-    if st.session_state.export_done:
-        if st.button("📂 Open Exports Folder"):
-            try:
-                os.startfile(os.path.abspath("exports"))
-            except Exception as e:
-                st.error(f"Could not open folder: {e}")
+if stop_btn and st.session_state.processing:
+    st.session_state.cancel_requested = True
+    st.info("Stop requested. Processing will end after the current batch.")
+
+handle_process_submission(
+    process_btn=process_btn,
+    uploaded_file=uploaded_file,
+    filter_config=filter_config,
+    start_date=start_date,
+    end_date=end_date,
+    dry_run=dry_run,
+)
+
+run_processing_tick()
+render_status_log(dry_run=dry_run)
+render_results_and_exports(
+    dry_run=dry_run,
+    rip_quality=rip_quality,
+    rip_codec=rip_codec,
+    auto_rip_after_export=auto_rip_after_export,
+)
