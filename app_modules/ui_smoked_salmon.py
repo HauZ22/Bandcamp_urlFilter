@@ -1,10 +1,12 @@
 from io import StringIO
 import os
+import re
 
 import streamlit as st
 
-from app_modules.streamrip import (
+from app_modules.smoked_salmon import (
     SALMON_SOURCE_OPTIONS,
+    apply_smoked_salmon_ai_review_settings,
     check_smoked_salmon_setup,
     ensure_smoked_salmon_config_file,
     get_missing_tool_install_hints,
@@ -30,6 +32,58 @@ def _read_log_tail(log_path: str, max_chars: int = 6000) -> str:
         return text[-max_chars:]
     except Exception:
         return ""
+
+
+def _extract_urls(text: str) -> list[str]:
+    if not text:
+        return []
+    matches = re.findall(r"https?://[^\s<>()\"']+", text, flags=re.IGNORECASE)
+    seen = set()
+    urls: list[str] = []
+    for url in matches:
+        clean = url.rstrip("),.;]}>")
+        if clean and clean not in seen:
+            seen.add(clean)
+            urls.append(clean)
+    return urls
+
+
+def _extract_spectral_urls(text: str) -> list[str]:
+    spectral_keywords = ("spectral", "spectrals", "lossy", "127.0.0.1", "localhost")
+    image_suffixes = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")
+    urls = _extract_urls(text)
+    selected: list[str] = []
+    seen = set()
+    for url in urls:
+        lowered = url.lower()
+        if any(k in lowered for k in spectral_keywords) or lowered.endswith(image_suffixes):
+            if url not in seen:
+                seen.add(url)
+                selected.append(url)
+    return selected
+
+
+def _parse_prompt_rules(raw_text: str) -> tuple[dict[str, str], list[str]]:
+    rules: dict[str, str] = {}
+    errors: list[str] = []
+    if not raw_text.strip():
+        return rules, errors
+
+    for idx, raw_line in enumerate(raw_text.splitlines(), start=1):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=>" not in line:
+            errors.append(f"Line {idx}: expected `prompt substring => answer`")
+            continue
+        prompt_text, answer_text = line.split("=>", 1)
+        prompt_key = prompt_text.strip().lower()
+        answer_value = answer_text.strip()
+        if not prompt_key:
+            errors.append(f"Line {idx}: prompt substring is empty")
+            continue
+        rules[prompt_key] = answer_value
+    return rules, errors
 
 
 def _collect_album_paths(single_path: str, multi_paths_text: str, uploaded_paths_file) -> list[str]:
@@ -119,6 +173,67 @@ def render_smoked_salmon_tab(default_downloads_folder: str, locked: bool = False
             disabled=locked,
         )
         st.caption("Install command: `uv tool install git+https://github.com/smokin-salmon/smoked-salmon`")
+        st.markdown("Prompt handling")
+        lossy_master_choice = st.selectbox(
+            "When prompted: Is this release lossy mastered?",
+            options=[
+                "Let salmon default",
+                "Yes",
+                "No",
+                "Reopen spectrals",
+                "Abort upload",
+                "Delete music folder",
+            ],
+            index=0,
+            key="salmon_lossy_master_choice",
+            disabled=locked,
+        )
+        lossy_master_comment = st.text_area(
+            "Lossy master comment (sent only when salmon asks for it)",
+            key="salmon_lossy_master_comment",
+            placeholder="Optional note shown in lossy approval report...",
+            height=90,
+            disabled=locked,
+        )
+        enable_ai_review = st.checkbox(
+            "Enable AI metadata review (auto-answer Yes when asked)",
+            key="salmon_enable_ai_review",
+            disabled=locked,
+        )
+        ai_api_key = st.text_input(
+            "AI API Key (required when AI review is enabled)",
+            key="salmon_ai_api_key",
+            type="password",
+            disabled=locked,
+        )
+        ai_followup_choice = st.selectbox(
+            "When AI suggests metadata updates",
+            options=[
+                "Keep original metadata",
+                "Apply suggestions",
+                "Prompt model and rerun",
+            ],
+            index=0,
+            key="salmon_ai_followup_choice",
+            disabled=locked,
+        )
+        ai_rerun_instruction = st.text_input(
+            "AI rerun instruction (used only for 'Prompt model and rerun')",
+            key="salmon_ai_rerun_instruction",
+            disabled=locked,
+        )
+        custom_prompt_rules = st.text_area(
+            "Custom prompt answers (one per line: prompt substring => answer)",
+            key="salmon_custom_prompt_rules",
+            height=160,
+            placeholder=(
+                "# Example\n"
+                "would you still like to upload? => y\n"
+                "what is the encoding of this release? [a]bort => LOSSLESS\n"
+                "are the above tags acceptable? => y\n"
+            ),
+            disabled=locked,
+        )
 
     with st.expander("🧪 Setup Assistant", expanded=True):
         status = check_smoked_salmon_setup()
@@ -320,6 +435,38 @@ def render_smoked_salmon_tab(default_downloads_folder: str, locked: bool = False
         if not album_paths:
             st.warning("No folder paths detected. Add at least one target folder.")
         else:
+            parsed_rules, parse_errors = _parse_prompt_rules(custom_prompt_rules)
+            if parse_errors:
+                st.error("Custom prompt rules have formatting errors:\n" + "\n".join(parse_errors))
+                return
+            if enable_ai_review and not ai_api_key.strip():
+                st.error("AI metadata review is enabled, but AI API Key is empty.")
+                return
+            if enable_ai_review and ai_followup_choice == "Prompt model and rerun" and not ai_rerun_instruction.strip():
+                st.error("AI rerun instruction is required for 'Prompt model and rerun'.")
+                return
+            if enable_ai_review:
+                ok_ai, msg_ai = apply_smoked_salmon_ai_review_settings(
+                    config_path,
+                    enabled=True,
+                    api_key=ai_api_key.strip(),
+                )
+                if not ok_ai:
+                    st.error(msg_ai)
+                    return
+                parsed_rules["run ai metadata review?"] = "y"
+                followup_map = {
+                    "Keep original metadata": "k",
+                    "Apply suggestions": "a",
+                    "Prompt model and rerun": "p",
+                }
+                parsed_rules["[a]pply suggestions, [k]eep original, [p]rompt model and rerun"] = followup_map.get(
+                    ai_followup_choice,
+                    "k",
+                )
+                if ai_followup_choice == "Prompt model and rerun":
+                    parsed_rules["what should the model change or prioritize?"] = ai_rerun_instruction.strip()
+
             current_setup = check_smoked_salmon_setup()
             st.session_state.salmon_setup_status = current_setup
             if not current_setup.get("has_salmon"):
@@ -349,16 +496,39 @@ def render_smoked_salmon_tab(default_downloads_folder: str, locked: bool = False
 
             live_log_caption = st.empty()
             live_log_box = st.empty()
+            live_spectral_caption = st.empty()
+            live_spectral_links = st.empty()
+            live_spectral_images = st.empty()
 
             def _update_live_log(log_path: str, tail_text: str) -> None:
                 live_log_caption.caption(f"Live smoked-salmon log: {log_path}")
                 live_log_box.code(tail_text or "(waiting for smoked-salmon output...)", language="text")
+                spectral_urls = _extract_spectral_urls(tail_text)
+                if spectral_urls:
+                    live_spectral_caption.caption("Detected spectral/lossy URLs from live log:")
+                    live_spectral_links.markdown("\n".join([f"- {url}" for url in spectral_urls[:12]]))
+                    try:
+                        live_spectral_images.image(spectral_urls[:8], width=280)
+                    except Exception:
+                        pass
 
             with st.spinner("Running smoked-salmon uploads..."):
+                lossy_choice_map = {
+                    "Let salmon default": "",
+                    "Yes": "y",
+                    "No": "n",
+                    "Reopen spectrals": "r",
+                    "Abort upload": "a",
+                    "Delete music folder": "d",
+                }
                 success_count, attempted, failures, log_path = run_smoked_salmon_uploads(
                     album_paths,
                     source=source,
                     extra_args=extra_args,
+                    lossy_master_choice=lossy_choice_map.get(lossy_master_choice, ""),
+                    lossy_master_comment=lossy_master_comment,
+                    custom_prompt_responses=parsed_rules,
+                    fail_on_unhandled_prompt=True,
                     progress_callback=_update_live_log,
                 )
             _update_live_log(log_path, _read_log_tail(log_path))
@@ -401,3 +571,11 @@ def render_smoked_salmon_tab(default_downloads_folder: str, locked: bool = False
             key="salmon_log_tail",
             disabled=locked,
         )
+        spectral_urls = _extract_spectral_urls(log_text)
+        if spectral_urls:
+            st.caption("Spectral/Lossy URLs detected in last log:")
+            st.markdown("\n".join([f"- {url}" for url in spectral_urls[:20]]))
+            try:
+                st.image(spectral_urls[:10], width=280)
+            except Exception:
+                pass

@@ -9,12 +9,20 @@ from app_modules.streamrip import (
     QUALITY_OPTIONS,
     fetch_qobuz_user_identifier,
     format_quality_option,
+    get_streamrip_config_path,
+    get_streamrip_database_defaults,
     read_streamrip_config_text,
     save_streamrip_settings,
 )
 
 
-def init_streamrip_form_state(streamrip_settings: dict, default_rip_quality: int, default_codec: str) -> None:
+def init_streamrip_form_state(
+    streamrip_settings: dict,
+    default_rip_quality: int,
+    default_codec: str,
+    streamrip_config_path: str | None = None,
+) -> None:
+    resolved_config_path = streamrip_config_path or get_streamrip_config_path()
     use_auth = bool(streamrip_settings.get("use_auth_token", True))
     email_or_userid = str(streamrip_settings.get("email_or_userid", ""))
     password_or_token = str(streamrip_settings.get("password_or_token", ""))
@@ -22,6 +30,9 @@ def init_streamrip_form_state(streamrip_settings: dict, default_rip_quality: int
     quality = int(streamrip_settings.get("quality", default_rip_quality))
     codec = str(streamrip_settings.get("codec_selection", default_codec))
     downloads_folder = str(streamrip_settings.get("downloads_folder", ""))
+    default_db_path, default_failed_path = get_streamrip_database_defaults(resolved_config_path)
+    downloads_db_path = str(streamrip_settings.get("downloads_db_path", default_db_path))
+    failed_downloads_path = str(streamrip_settings.get("failed_downloads_path", default_failed_path))
 
     if quality not in QUALITY_OPTIONS:
         quality = default_rip_quality
@@ -36,6 +47,8 @@ def init_streamrip_form_state(streamrip_settings: dict, default_rip_quality: int
         quality,
         codec,
         downloads_folder,
+        downloads_db_path,
+        failed_downloads_path,
     )
     if st.session_state.get("streamrip_form_settings_signature") == signature:
         return
@@ -47,6 +60,8 @@ def init_streamrip_form_state(streamrip_settings: dict, default_rip_quality: int
     st.session_state.streamrip_form_quality = quality
     st.session_state.streamrip_form_codec = codec
     st.session_state.streamrip_form_downloads_folder = downloads_folder
+    st.session_state.streamrip_form_downloads_db_path = downloads_db_path
+    st.session_state.streamrip_form_failed_downloads_path = failed_downloads_path
     st.session_state.streamrip_form_settings_signature = signature
 
 
@@ -75,20 +90,39 @@ def render_streamrip_setup(
     key_prefix: str = "streamrip_setup",
     include_browser: bool = False,
 ) -> None:
+    def _show_error(message: str) -> None:
+        st.session_state.streamrip_setup_matcher_scroll_once = True
+        st.session_state.auto_scroll_alerts_once = True
+        st.error(message)
+
     def _k(name: str) -> str:
         return f"{key_prefix}_{name}"
 
     def _prime_widget(widget_name: str, shared_key: str) -> None:
         widget_key = _k(widget_name)
         shared_value = st.session_state.get(shared_key)
-        if st.session_state.get(widget_key) != shared_value:
+        current_signature = st.session_state.get("streamrip_form_settings_signature")
+        sync_marker_key = f"{widget_key}__synced_signature"
+        needs_sync = st.session_state.get(sync_marker_key) != current_signature
+        if not needs_sync:
+            if widget_key not in st.session_state:
+                needs_sync = True
+            elif isinstance(shared_value, str):
+                widget_value = st.session_state.get(widget_key, "")
+                # Re-prime text inputs when saved/shared value exists but widget state is blank.
+                if shared_value.strip() and not str(widget_value).strip():
+                    needs_sync = True
+        if needs_sync:
             st.session_state[widget_key] = shared_value
+            st.session_state[sync_marker_key] = current_signature
 
     _prime_widget("use_auth_token", "streamrip_form_use_auth_token")
     _prime_widget("email_or_userid", "streamrip_form_email_or_userid")
     _prime_widget("password_or_token", "streamrip_form_password_or_token")
     _prime_widget("app_id", "streamrip_form_app_id")
     _prime_widget("downloads_folder_draft", "streamrip_form_downloads_folder")
+    _prime_widget("downloads_db_path_draft", "streamrip_form_downloads_db_path")
+    _prime_widget("failed_downloads_path_draft", "streamrip_form_failed_downloads_path")
     _prime_widget("cfg_quality", "streamrip_form_quality")
     _prime_widget("cfg_codec", "streamrip_form_codec")
 
@@ -96,7 +130,7 @@ def render_streamrip_setup(
     with st.expander("🎧 Streamrip Setup", expanded=expanded_value):
         st.caption(f"Config path: `{streamrip_config_path}`")
         if not streamrip_config_ready:
-            st.error("Streamrip config is not available yet. Install streamrip and restart the app.")
+            _show_error("Streamrip config is not available yet. Install streamrip and restart the app.")
         else:
             col_setup1, col_setup2, col_setup3 = st.columns([1, 1, 1])
             with col_setup1:
@@ -117,6 +151,12 @@ def render_streamrip_setup(
                             st.session_state.streamrip_downloads_folder_draft,
                         )
                     )
+                    current_downloads_db_path = str(
+                        st.session_state.get("streamrip_form_downloads_db_path", "")
+                    )
+                    current_failed_downloads_path = str(
+                        st.session_state.get("streamrip_form_failed_downloads_path", "")
+                    )
 
                     updated_token = env_qobuz_token or current_token
                     updated_app_id = env_qobuz_app_id or current_app_id
@@ -129,12 +169,14 @@ def render_streamrip_setup(
                         quality=current_quality,
                         codec_selection=current_codec,
                         downloads_folder=current_downloads,
+                        downloads_db_path=current_downloads_db_path,
+                        failed_downloads_path=current_failed_downloads_path,
                     )
                     if ok:
                         st.success(msg)
                         st.rerun()
                     else:
-                        st.error(msg)
+                        _show_error(msg)
             with col_setup2:
                 if st.button(
                     "Fetch User ID / Email",
@@ -152,6 +194,12 @@ def render_streamrip_setup(
                             st.session_state.streamrip_downloads_folder_draft,
                         )
                     )
+                    current_downloads_db_path = str(
+                        st.session_state.get("streamrip_form_downloads_db_path", "")
+                    )
+                    current_failed_downloads_path = str(
+                        st.session_state.get("streamrip_form_failed_downloads_path", "")
+                    )
 
                     token_for_lookup = current_token or env_qobuz_token
                     app_id_for_lookup = current_app_id or env_qobuz_app_id
@@ -159,7 +207,7 @@ def render_streamrip_setup(
                         app_id_for_lookup, token_for_lookup
                     )
                     if not ok_lookup:
-                        st.error(lookup_msg)
+                        _show_error(lookup_msg)
                     else:
                         save_ok, save_msg = save_streamrip_settings(
                             streamrip_config_path,
@@ -170,6 +218,8 @@ def render_streamrip_setup(
                             quality=current_quality,
                             codec_selection=current_codec,
                             downloads_folder=current_downloads,
+                            downloads_db_path=current_downloads_db_path,
+                            failed_downloads_path=current_failed_downloads_path,
                         )
                         if save_ok:
                             st.success(
@@ -178,7 +228,7 @@ def render_streamrip_setup(
                             )
                             st.rerun()
                         else:
-                            st.error(save_msg)
+                            _show_error(save_msg)
             with col_setup3:
                 if st.button(
                     "Reload Streamrip Config",
@@ -221,6 +271,19 @@ def render_streamrip_setup(
                         key=_k("downloads_folder_draft"),
                         help="Leave as-is if you do not want to change your current streamrip downloads folder.",
                     )
+                path_row_col1, path_row_col2 = st.columns(2)
+                with path_row_col1:
+                    downloads_db_path_cfg = st.text_input(
+                        "Downloads DB Path",
+                        key=_k("downloads_db_path_draft"),
+                        help="Defaults to `downloads.db` in the same folder as streamrip config.toml.",
+                    )
+                with path_row_col2:
+                    failed_downloads_path_cfg = st.text_input(
+                        "Failed Downloads Folder Path",
+                        key=_k("failed_downloads_path_draft"),
+                        help="Defaults to `failed/` in the same folder as streamrip config.toml.",
+                    )
 
                 st.write("Streamrip Defaults")
                 defaults_col1, defaults_col2 = st.columns(2)
@@ -231,6 +294,8 @@ def render_streamrip_setup(
                     cfg_quality = st.selectbox(
                         "Default Quality in streamrip config",
                         options=QUALITY_OPTIONS,
+                        index=None,
+                        placeholder="Choose quality",
                         format_func=format_quality_option,
                         key=quality_widget_key,
                     )
@@ -241,6 +306,8 @@ def render_streamrip_setup(
                     cfg_codec = st.selectbox(
                         "Default Codec in streamrip config",
                         options=CODEC_OPTIONS,
+                        index=None,
+                        placeholder="Choose codec",
                         key=codec_widget_key,
                     )
                 save_streamrip_btn = st.form_submit_button(
@@ -250,30 +317,68 @@ def render_streamrip_setup(
                 )
 
             if save_streamrip_btn:
+                downloads_folder_cfg = str(downloads_folder_cfg).strip()
+                if not downloads_folder_cfg:
+                    _show_error("Downloads Folder Path cannot be blank.")
+                    return
+                normalized_downloads_path = os.path.abspath(os.path.expanduser(downloads_folder_cfg))
+                if not os.path.isdir(normalized_downloads_path):
+                    _show_error(f"Downloads Folder Path is not a valid folder: `{normalized_downloads_path}`")
+                    return
+                downloads_db_path_cfg = str(downloads_db_path_cfg).strip()
+                if not downloads_db_path_cfg:
+                    _show_error("Downloads DB Path cannot be blank.")
+                    return
+                normalized_downloads_db_path = os.path.abspath(os.path.expanduser(downloads_db_path_cfg))
+                try:
+                    os.makedirs(os.path.dirname(normalized_downloads_db_path), exist_ok=True)
+                except Exception as e:
+                    _show_error(f"Could not create Downloads DB parent directory: {e}")
+                    return
+                failed_downloads_path_cfg = str(failed_downloads_path_cfg).strip()
+                if not failed_downloads_path_cfg:
+                    _show_error("Failed Downloads Folder Path cannot be blank.")
+                    return
+                normalized_failed_downloads_path = os.path.abspath(os.path.expanduser(failed_downloads_path_cfg))
+                try:
+                    os.makedirs(normalized_failed_downloads_path, exist_ok=True)
+                except Exception as e:
+                    _show_error(f"Could not create Failed Downloads Folder Path: {e}")
+                    return
+                selected_quality = cfg_quality if cfg_quality is not None else default_rip_quality
+                if selected_quality not in QUALITY_OPTIONS:
+                    selected_quality = default_rip_quality
+                selected_codec = cfg_codec if cfg_codec is not None else default_codec
+                if selected_codec not in CODEC_OPTIONS:
+                    selected_codec = default_codec
                 ok, msg = save_streamrip_settings(
                     streamrip_config_path,
                     use_auth_token=use_auth_token_cfg,
                     email_or_userid=email_or_userid_cfg,
                     password_or_token=password_or_token_cfg,
                     app_id=app_id_cfg,
-                    quality=cfg_quality,
-                    codec_selection=cfg_codec,
-                    downloads_folder=downloads_folder_cfg,
+                    quality=selected_quality,
+                    codec_selection=selected_codec,
+                    downloads_folder=normalized_downloads_path,
+                    downloads_db_path=normalized_downloads_db_path,
+                    failed_downloads_path=normalized_failed_downloads_path,
                 )
                 if ok:
-                    st.session_state.streamrip_downloads_folder_persist = str(downloads_folder_cfg)
-                    st.session_state.streamrip_downloads_folder_draft = str(downloads_folder_cfg)
+                    st.session_state.streamrip_downloads_folder_persist = normalized_downloads_path
+                    st.session_state.streamrip_downloads_folder_draft = normalized_downloads_path
                     st.session_state.streamrip_form_use_auth_token = bool(use_auth_token_cfg)
                     st.session_state.streamrip_form_email_or_userid = str(email_or_userid_cfg)
                     st.session_state.streamrip_form_password_or_token = str(password_or_token_cfg)
                     st.session_state.streamrip_form_app_id = str(app_id_cfg)
-                    st.session_state.streamrip_form_downloads_folder = str(downloads_folder_cfg)
-                    st.session_state.streamrip_form_quality = int(cfg_quality)
-                    st.session_state.streamrip_form_codec = str(cfg_codec)
+                    st.session_state.streamrip_form_downloads_folder = normalized_downloads_path
+                    st.session_state.streamrip_form_downloads_db_path = normalized_downloads_db_path
+                    st.session_state.streamrip_form_failed_downloads_path = normalized_failed_downloads_path
+                    st.session_state.streamrip_form_quality = selected_quality
+                    st.session_state.streamrip_form_codec = selected_codec
                     st.success(msg)
                     st.rerun()
                 else:
-                    st.error(msg)
+                    _show_error(msg)
 
             with st.expander("Raw streamrip config", expanded=False):
                 show_config_secrets = st.checkbox("Show secrets", value=False, key=_k("show_secrets"))
@@ -284,7 +389,7 @@ def render_streamrip_setup(
 
         if streamrip_needs_setup:
             st.warning(
-                "Complete Streamrip setup before ripping: set Qobuz email/user ID and token/password in this panel."
+                "Complete Streamrip setup before ripping: set Qobuz email/user ID, token/password, Downloads Folder Path, Downloads DB Path, and Failed Downloads Folder Path."
             )
 
 
@@ -505,6 +610,7 @@ def _render_download_folder_browser() -> None:
             else:
                 new_folder_path = os.path.join(browser_path, raw_name)
                 if os.path.exists(new_folder_path):
+                    st.session_state.auto_scroll_alerts_once = True
                     st.error(f"Folder already exists: `{raw_name}`")
                 else:
                     try:
@@ -513,6 +619,7 @@ def _render_download_folder_browser() -> None:
                         if navigate_to(new_folder_path):
                             st.rerun()
                     except Exception as e:
+                        st.session_state.auto_scroll_alerts_once = True
                         st.error(f"Could not create folder: {e}")
 
         if st.session_state.streamrip_browser_notice:

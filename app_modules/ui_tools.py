@@ -23,6 +23,7 @@ def _read_log_tail(log_path: str, max_chars: int = 6000) -> str:
 def render_direct_qobuz_rip_tab(
     rip_quality: int,
     rip_codec: str,
+    streamrip_needs_setup: bool = False,
     locked: bool = False,
 ) -> None:
     st.subheader("🔗 Direct Qobuz Rip")
@@ -67,9 +68,16 @@ def render_direct_qobuz_rip_tab(
         "Rip Parsed Qobuz Links",
         type="primary",
         key="direct_qobuz_rip_btn",
-        disabled=locked,
+        disabled=locked or streamrip_needs_setup,
     )
     if rip_direct_btn:
+        if streamrip_needs_setup:
+            st.session_state.streamrip_setup_matcher_expand_once = True
+            st.session_state.streamrip_setup_matcher_scroll_once = True
+            st.session_state.streamrip_setup_attention_message = (
+                "Complete Streamrip setup before ripping: Qobuz credentials, Downloads Folder Path, Downloads DB Path, and Failed Downloads Folder Path are required."
+            )
+            st.rerun()
         if not direct_urls:
             st.warning("No Qobuz links detected. Paste links or upload a file first.")
         else:
@@ -83,10 +91,18 @@ def render_direct_qobuz_rip_tab(
 
             live_log_caption = st.empty()
             live_log_box = st.empty()
+            rip_progress_caption = st.empty()
+            rip_progress_bar = st.progress(0.0)
 
             def _update_live_log(log_path: str, tail_text: str) -> None:
                 live_log_caption.caption(f"Live rip log: {log_path}")
                 live_log_box.code(tail_text or "(waiting for streamrip output...)", language="text")
+
+            def _update_rip_status(done: int, total: int, message: str) -> None:
+                normalized_total = max(int(total), 1)
+                normalized_done = min(max(int(done), 0), normalized_total)
+                rip_progress_bar.progress(float(normalized_done) / float(normalized_total))
+                rip_progress_caption.caption(message)
 
             with st.spinner("Running streamrip for parsed Qobuz links..."):
                 success_count, total_urls, failures, log_path = run_streamrip_batches(
@@ -94,8 +110,10 @@ def render_direct_qobuz_rip_tab(
                     rip_quality,
                     rip_codec,
                     progress_callback=_update_live_log,
+                    status_callback=_update_rip_status,
                 )
             _update_live_log(log_path, _read_log_tail(log_path))
+            _update_rip_status(total_urls, total_urls, "Streamrip run finished.")
             st.session_state.direct_rip_last_log_path = log_path
             if failures:
                 st.session_state.direct_rip_last_level = "error"
@@ -113,6 +131,7 @@ def render_direct_qobuz_rip_tab(
         if st.session_state.direct_rip_last_level == "success":
             st.success(st.session_state.direct_rip_last_message)
         elif st.session_state.direct_rip_last_level == "error":
+            st.session_state.auto_scroll_alerts_once = True
             st.error(st.session_state.direct_rip_last_message)
         else:
             st.info(st.session_state.direct_rip_last_message)
