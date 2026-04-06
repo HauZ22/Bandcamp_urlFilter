@@ -63,7 +63,7 @@ async def process_single_entry(
     }
 
 
-async def process_batch(entries):
+async def process_batch(entries, progress_callback=None):
     concurrency = _env_int("BANDCAMP_CONCURRENCY", 2)
     min_interval_seconds = _env_float("BANDCAMP_MIN_INTERVAL_SECONDS", 1.0)
     semaphore = asyncio.Semaphore(concurrency)
@@ -81,6 +81,12 @@ async def process_batch(entries):
             for entry in entries
         ]
         rows = []
+        total = len(tasks)
+        done = 0
         for task in asyncio.as_completed(tasks):
-            rows.append(await task)
+            row = await task
+            rows.append(row)
+            done += 1
+            if progress_callback:
+                progress_callback(done, total, row)
         return rows

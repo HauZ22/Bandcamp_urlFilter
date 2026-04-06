@@ -32,6 +32,7 @@ def handle_process_submission(
         return
 
     if uploaded_file is None:
+        st.session_state.auto_scroll_alerts_once = True
         st.error("Please upload a .txt or .log file first.")
         return
 
@@ -86,6 +87,7 @@ def handle_process_submission(
 
     load_dotenv(override=True)
     if not os.getenv("QOBUZ_USER_AUTH_TOKEN"):
+        st.session_state.auto_scroll_alerts_once = True
         st.error(
             "QOBUZ_USER_AUTH_TOKEN is missing. Add it in `.env`, then run again, or use Dry Run mode."
         )
@@ -102,13 +104,19 @@ def run_processing_tick() -> None:
     if not st.session_state.processing:
         return
 
-    st.write("### Status Log")
-    st.text(st.session_state.status_log)
-
     total = st.session_state.total_entries
     completed = st.session_state.current_index
+    matched_so_far = len([r for r in st.session_state.results if r.get("Qobuz Link")])
+    errors_so_far = len([r for r in st.session_state.results if str(r.get("Status", "")).startswith("⚠️")])
+    status_box = st.empty()
+    progress_box = st.empty()
+    detail_box = st.empty()
+    status_box.info(st.session_state.status_log)
     if total > 0:
-        st.progress(completed / total)
+        progress_box.progress(completed / total, text=f"Processed {completed}/{total}")
+    detail_box.caption(
+        f"Matched so far: {matched_so_far} | Errors so far: {errors_so_far} | Remaining: {max(total - completed, 0)}"
+    )
 
     if st.session_state.cancel_requested:
         st.session_state.processing = False
@@ -124,16 +132,39 @@ def run_processing_tick() -> None:
 
         if start_idx < total:
             st.session_state.status_log = f"Processing {start_idx + 1} to {end_idx} of {total}..."
+            status_box.info(st.session_state.status_log)
             batch = st.session_state.pending_entries[start_idx:end_idx]
-            batch_rows = asyncio.run(process_batch(batch))
+
+            def _on_batch_progress(done: int, batch_total: int, row: dict) -> None:
+                global_done = start_idx + done
+                album = str(row.get("Album", "") or row.get("Bandcamp Link", "") or "").strip()
+                status_text = str(row.get("Status", "")).strip() or "Working"
+                progress_fraction = (global_done / total) if total > 0 else 0.0
+                progress_box.progress(progress_fraction, text=f"Processed {global_done}/{total}")
+                detail_box.caption(
+                    f"Current: {status_text} | {album[:120]}"
+                )
+
+            batch_rows = asyncio.run(process_batch(batch, progress_callback=_on_batch_progress))
             st.session_state.results.extend(batch_rows)
             st.session_state.current_index = end_idx
+            matched_so_far = len([r for r in st.session_state.results if r.get("Qobuz Link")])
+            errors_so_far = len([r for r in st.session_state.results if str(r.get("Status", "")).startswith("⚠️")])
+            detail_box.caption(
+                f"Matched so far: {matched_so_far} | Errors so far: {errors_so_far} | Remaining: {max(total - end_idx, 0)}"
+            )
 
         if st.session_state.current_index >= total:
             st.session_state.processing = False
             st.session_state.process_complete = True
             matched_count = len([r for r in st.session_state.results if r["Qobuz Link"]])
             st.session_state.status_log = f"Complete! We found {matched_count} out of {total} matches."
+            status_box.success(st.session_state.status_log)
+            if total > 0:
+                progress_box.progress(1.0, text=f"Processed {total}/{total}")
+            detail_box.caption(
+                f"Matched total: {matched_count} | Not matched: {max(total - matched_count, 0)}"
+            )
 
     st.rerun()
 
@@ -226,10 +257,18 @@ def render_results_and_exports(
 
                     live_log_caption = st.empty()
                     live_log_box = st.empty()
+                    rip_progress_caption = st.empty()
+                    rip_progress_bar = st.progress(0.0)
 
                     def _update_live_log(log_path: str, tail_text: str) -> None:
                         live_log_caption.caption(f"Live rip log: {log_path}")
                         live_log_box.code(tail_text or "(waiting for streamrip output...)", language="text")
+
+                    def _update_rip_status(done: int, total: int, message: str) -> None:
+                        normalized_total = max(int(total), 1)
+                        normalized_done = min(max(int(done), 0), normalized_total)
+                        rip_progress_bar.progress(float(normalized_done) / float(normalized_total))
+                        rip_progress_caption.caption(message)
 
                     with st.spinner("Running streamrip for exported batches..."):
                         success_count, total_urls, failures, log_path = run_streamrip_batches(
@@ -237,8 +276,10 @@ def render_results_and_exports(
                             rip_quality,
                             rip_codec,
                             progress_callback=_update_live_log,
+                            status_callback=_update_rip_status,
                         )
                     _update_live_log(log_path, _read_log_tail(log_path))
+                    _update_rip_status(total_urls, total_urls, "Streamrip run finished.")
                     st.session_state.rip_last_log_path = log_path
                     if failures:
                         st.session_state.rip_last_level = "error"
@@ -252,12 +293,14 @@ def render_results_and_exports(
                         )
                 st.rerun()
         except Exception as e:
+            st.session_state.auto_scroll_alerts_once = True
             st.error(f"Error during export/rip: {e}")
 
     if st.session_state.rip_last_message:
         if st.session_state.rip_last_level == "success":
             st.success(st.session_state.rip_last_message)
         elif st.session_state.rip_last_level == "error":
+            st.session_state.auto_scroll_alerts_once = True
             st.error(st.session_state.rip_last_message)
         else:
             st.info(st.session_state.rip_last_message)
