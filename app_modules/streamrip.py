@@ -348,6 +348,9 @@ def get_streamrip_config_path() -> str:
         return os.path.join(config_home, "streamrip", "config.toml")
 
 
+
+
+
 def get_streamrip_database_defaults(config_path: str) -> tuple[str, str]:
     config_dir = os.path.dirname(os.path.abspath(os.path.expanduser(config_path)))
     return os.path.join(config_dir, "downloads.db"), os.path.join(config_dir, "failed")
