@@ -3,6 +3,7 @@ import asyncio
 import aiohttp
 import logging
 import re
+import time
 from rapidfuzz import fuzz
 from dotenv import load_dotenv
 
@@ -115,10 +116,36 @@ def is_match(bandcamp_data: dict, qobuz_album: dict) -> bool:
     if not qobuz_album:
         return False
 
-    # Only match if the album is streamable on Qobuz
+    album_title = qobuz_album.get("title", "Unknown")
+
+    # 1. Base Streamable Check
     if not qobuz_album.get("streamable", False):
+        logger.debug(f"Skipped '{album_title}': Not streamable flag is False.")
         return False
         
+    # 2. Release Date Check (Exclude Pre-orders)
+    # released_at is a Unix timestamp. If in the future, it's a pre-order.
+    released_at = qobuz_album.get("released_at")
+    if released_at and released_at > time.time():
+        release_date_str = time.strftime('%Y-%m-%d', time.gmtime(released_at))
+        logger.debug(f"Skipped '{album_title}': Pre-order (Released at {release_date_str}).")
+        return False
+
+    # 3. Completeness Check (Exclude Partially Streamable Albums)
+    # Compare streamable_count with tracks_count if available.
+    tracks_count = qobuz_album.get("tracks_count", 0)
+    streamable_count = qobuz_album.get("streamable_count")
+    
+    # Fallback: if 'tracks' exists as a list (some API versions), check its length
+    if streamable_count is None and "tracks" in qobuz_album and isinstance(qobuz_album["tracks"], dict):
+        # Sometimes 'tracks' is a dict with 'items'
+        streamable_count = qobuz_album["tracks"].get("count")
+
+    if streamable_count is not None and tracks_count > 0:
+        if streamable_count < tracks_count:
+            logger.debug(f"Skipped '{album_title}': Partial streaming ({streamable_count}/{tracks_count} tracks).")
+            return False
+
     qb_artist = qobuz_album.get("artist", {}).get("name", "")
     qb_album = qobuz_album.get("title", "")
     qb_tracks = qobuz_album.get("tracks_count", 0)
@@ -127,19 +154,20 @@ def is_match(bandcamp_data: dict, qobuz_album: dict) -> bool:
     bc_album = bandcamp_data.get("album", "")
     bc_tracks = bandcamp_data.get("track_count", 0)
     
-    # Track Count logic: Exact match OR track count is very close (+- 1)
-    # The requirement is EXACT MATCH
+    # 4. Track Count Comparison
+    # Requirement: EXACT MATCH
     if qb_tracks != bc_tracks and bc_tracks > 0:
+        logger.debug(f"Skipped '{album_title}': Track count mismatch (Qobuz: {qb_tracks}, Bandcamp: {bc_tracks}).")
         return False
 
-    # Fuzzy Title & Artist Matching
+    # 5. Fuzzy Title & Artist Matching
     artist_score = fuzz.token_sort_ratio(qb_artist.lower(), bc_artist.lower())
     album_score = fuzz.token_sort_ratio(qb_album.lower(), bc_album.lower())
     
-    # You can adjust these thresholds as necessary (85 is generally a good "Very similar" threshold)
     if artist_score > 80 and album_score > 80:
         return True
         
+    logger.debug(f"Skipped '{album_title}': Fuzzy score too low (Artist: {artist_score}, Album: {album_score}).")
     return False
 
 async def match_album(session: aiohttp.ClientSession, bandcamp_data: dict) -> dict:
