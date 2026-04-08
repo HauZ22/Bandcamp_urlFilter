@@ -309,9 +309,8 @@ def render_results_and_exports(
                                     tracker_results = []
                                     for tracker in trackers:
                                         is_dupe, info = await tracker.search_duplicates(artist, album, upc=upc)
-                                        if is_dupe:
-                                            tracker_results.append(f"Dupe ({tracker.site_name})")
-                                        elif info:
+                                        if info:
+                                            # info now contains descriptive messages like "Dupe (UPC) @ RED"
                                             tracker_results.append(info)
                                     
                                     if tracker_results:

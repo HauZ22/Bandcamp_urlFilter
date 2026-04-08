@@ -55,6 +55,10 @@ class GazelleAPI:
             "Authorization": self.api_key
         }
 
+        # Debug-Logging der Parameter
+        from app_modules.debug_logging import emit_debug
+        emit_debug("gazelle_api", f"[{self.site_name}] Request params: {params}")
+
         try:
             async with aiohttp.ClientSession(headers=headers) as session:
                 async with session.get(
@@ -67,7 +71,10 @@ class GazelleAPI:
                         try:
                             data = await response.json()
                             if data.get("status") == "success":
-                                return data.get("response"), None
+                                resp_data = data.get("response")
+                                res_count = len(resp_data.get("results", [])) if resp_data and isinstance(resp_data, dict) else 0
+                                emit_debug("gazelle_api", f"[{self.site_name}] Success. Results: {res_count}")
+                                return resp_data, None
                             
                             err = data.get('error', 'Unknown error')
                             if response.status == 403 or "not logged in" in str(err).lower():
@@ -119,13 +126,12 @@ class GazelleAPI:
             }
             response, error = await self._request(params)
             if response:
-                if self._has_lossless_in_results(response.get("results", [])):
-                    return True, f"Dupe found via UPC on {self.site_name}"
+                if self._has_lossless_in_results(response.get("results", []), target_artist=artist):
+                    return True, f"Dupe (UPC) @ {self.site_name}"
             elif self.failed:
-                 return False, f"⚠️ {self.site_name} Failed during UPC search: {self.last_error}"
+                 return False, f"⚠️ {self.site_name} Failed (UPC): {self.last_error}"
             
         # 2. Fallback to Precise Artist + Album search
-        # Using specific parameters instead of searchstr for much higher precision
         params = {
             "action": "browse",
             "artistname": artist.strip(),
@@ -137,19 +143,28 @@ class GazelleAPI:
             return False, f"⚠️ {self.site_name} Error: {error}"
             
         if response and self._has_lossless_in_results(response.get("results", [])):
-            return True, f"Dupe found on {self.site_name}"
+            return True, f"Dupe (Artist/Album) @ {self.site_name}"
             
-        return False, ""
+        return False, f"✅ {self.site_name}: No dupe"
 
-    def _has_lossless_in_results(self, results: list) -> bool:
+    def _has_lossless_in_results(self, results: list, target_artist: Optional[str] = None) -> bool:
         if not results:
             return False
             
         for group in results:
+            # Safety check: if searching by UPC, verify artist name to avoid shared barcode errors
+            if target_artist:
+                group_artist = str(group.get("artist", "")).lower()
+                if target_artist.lower() not in group_artist and group_artist not in target_artist.lower():
+                    # If the result artist is completely different, skip this group
+                    # (e.g. search for 'Jeddy Bear' but UPC matches 'Various Artists' or 'Other Guy')
+                    continue
+
             torrents = group.get("torrents", [])
             for torrent in torrents:
                 fmt = str(torrent.get("format", "")).upper()
                 enc = str(torrent.get("encoding", "")).upper()
+                # Ensure we strictly match FLAC/Lossless
                 if fmt == "FLAC" and enc in ["LOSSLESS", "24BIT LOSSLESS"]:
                     return True
         return False

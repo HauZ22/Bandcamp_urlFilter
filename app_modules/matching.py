@@ -69,10 +69,8 @@ async def process_single_entry(
             results = []
             for tracker in trackers:
                 is_dupe, info = await tracker.search_duplicates(artist, album, upc=upc)
-                if is_dupe:
-                    results.append(f"Dupe ({tracker.site_name})")
-                elif info:
-                    # tracker info contains errors/warnings
+                if info:
+                    # info now contains descriptive messages like "Dupe (UPC) @ RED"
                     results.append(info)
             
             if results:
@@ -81,6 +79,7 @@ async def process_single_entry(
         return {
             "Artist": artist,
             "Album": album,
+            "UPC": upc,
             "Bandcamp Link": bc_data.get("url"),
             "Qobuz Link": match_data.get("qobuz_url"),
             "Status": status,
