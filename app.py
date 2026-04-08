@@ -254,6 +254,19 @@ OPS_SESSION_COOKIE="""
             _app_debug("Sidebar action: Get Qobuz Token button clicked.")
             open_qobuz_help_modal()
 
+    with st.sidebar.expander("🛠️ Tracker Debugger", expanded=False):
+        st.caption("Manually test duplicate checks for RED/OPS.")
+        dbg_artist = st.text_input("Test Artist", key="dbg_art")
+        dbg_album = st.text_input("Test Album", key="dbg_alb")
+        dbg_upc = st.text_input("Test UPC (Optional)", key="dbg_upc")
+        
+        if st.button("Run Diagnostic Check", use_container_width=True):
+            if not dbg_artist or not dbg_album:
+                st.warning("Please enter at least Artist and Album.")
+            else:
+                from app_modules.ui_processing import run_tracker_diagnostic
+                run_tracker_diagnostic(dbg_artist, dbg_album, dbg_upc)
+
 render_qobuz_help_modals()
 
 def _load_streamrip_runtime_state(

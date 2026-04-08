@@ -10,28 +10,9 @@ class GazelleAPI:
         self.api_key = api_key.strip().strip("'").strip('"')
         self.rate_limit_seconds = rate_limit_seconds
         self._last_request_time = 0.0
-        self._session: Optional[aiohttp.ClientSession] = None
         self.failed = False
         self.last_error = ""
         self.authenticated = False
-
-    async def _ensure_session(self):
-        if self._session is None or self._session.closed:
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-                "Accept": "application/json",
-                "Referer": f"{self.site_url}/",
-                "Connection": "keep-alive"
-            }
-
-            if self.api_key:
-                headers["Authorization"] = self.api_key
-            
-            self._session = aiohttp.ClientSession(headers=headers)
-
-    async def close(self):
-        if self._session and not self._session.closed:
-            await self._session.close()
 
     async def authenticate(self) -> bool:
         """
@@ -64,44 +45,52 @@ class GazelleAPI:
         if not self.api_key:
             return None, "No API Key configured."
 
-        await self._ensure_session()
         self._last_request_time = time.monotonic()
         
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+            "Referer": f"{self.site_url}/",
+            "Connection": "close",
+            "Authorization": self.api_key
+        }
+
         try:
-            async with self._session.get(
-                f"{self.site_url}/ajax.php", 
-                params=params, 
-                timeout=15,
-                allow_redirects=False
-            ) as response:
-                if response.status == 200:
-                    try:
-                        data = await response.json()
-                        if data.get("status") == "success":
-                            return data.get("response"), None
+            async with aiohttp.ClientSession(headers=headers) as session:
+                async with session.get(
+                    f"{self.site_url}/ajax.php", 
+                    params=params, 
+                    timeout=15,
+                    allow_redirects=False
+                ) as response:
+                    if response.status == 200:
+                        try:
+                            data = await response.json()
+                            if data.get("status") == "success":
+                                return data.get("response"), None
+                            
+                            err = data.get('error', 'Unknown error')
+                            if response.status == 403 or "not logged in" in str(err).lower():
+                                self.failed = True
+                                self.last_error = f"Auth Error: {err}"
+                            return None, f"API Error: {err}"
+                        except Exception as e:
+                            return None, f"JSON Parse Error: {str(e)}"
+                    elif response.status in (301, 302):
+                        loc = response.headers.get("Location", "")
+                        self.failed = True
+                        self.last_error = f"Redirect to {loc}"
                         
-                        err = data.get('error', 'Unknown error')
-                        if response.status == 403 or "not logged in" in str(err).lower():
-                            self.failed = True
-                            self.last_error = f"Auth Error: {err}"
-                        return None, f"API Error: {err}"
-                    except Exception as e:
-                        return None, f"JSON Parse Error: {str(e)}"
-                elif response.status in (301, 302):
-                    loc = response.headers.get("Location", "")
-                    self.failed = True
-                    self.last_error = f"Redirect to {loc}"
-                    
-                    if "login.php" in loc:
-                        return None, "Login required (API Key invalid or Permission denied?)"
-                    return None, f"Anti-bot/Redirect to {loc}"
-                elif response.status == 403:
-                    self.failed = True
-                    self.last_error = "403 Forbidden"
-                    return None, "Forbidden (403). Tracker might be blocking this IP or API Key."
-                elif response.status == 429:
-                    return None, "Rate limited (429)."
-                return None, f"HTTP {response.status}"
+                        if "login.php" in loc:
+                            return None, "Login required (API Key invalid or Permission denied?)"
+                        return None, f"Anti-bot/Redirect to {loc}"
+                    elif response.status == 403:
+                        self.failed = True
+                        self.last_error = "403 Forbidden"
+                        return None, "Forbidden (403). Tracker might be blocking this IP or API Key."
+                    elif response.status == 429:
+                        return None, "Rate limited (429)."
+                    return None, f"HTTP {response.status}"
         except Exception as e:
             return None, f"Request Exception: {str(e)}"
 
@@ -123,10 +112,10 @@ class GazelleAPI:
                 return False, f"⚠️ {self.site_name} Auth Failed"
             
         # 1. Try search by UPC (if provided)
-        if upc:
+        if upc and str(upc).strip():
             params = {
                 "action": "browse",
-                "upc": upc
+                "upc": str(upc).strip()
             }
             response, error = await self._request(params)
             if response:
@@ -135,11 +124,12 @@ class GazelleAPI:
             elif self.failed:
                  return False, f"⚠️ {self.site_name} Failed during UPC search: {self.last_error}"
             
-        # 2. Fallback to Artist + Album search
-        search_str = f"{artist} {album}".strip()
+        # 2. Fallback to Precise Artist + Album search
+        # Using specific parameters instead of searchstr for much higher precision
         params = {
             "action": "browse",
-            "searchstr": search_str
+            "artistname": artist.strip(),
+            "groupname": album.strip()
         }
         
         response, error = await self._request(params)

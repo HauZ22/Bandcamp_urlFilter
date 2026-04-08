@@ -3,6 +3,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from io import StringIO
+from typing import Optional
 
 import pandas as pd
 import streamlit as st
@@ -137,12 +138,10 @@ def run_processing_tick() -> None:
         st.session_state.processing = False
         st.session_state.process_complete = False
         
-        # Close trackers
-        for tracker in st.session_state.get("batch_trackers", []):
-            asyncio.run(tracker.close())
-        st.session_state.batch_trackers = []
-
         matched_count = len([r for r in st.session_state.results if r["Qobuz Link"]])
+        detail_box.caption(
+            f"Current: Stopped | Matches found: {matched_count}"
+        )
         st.session_state.status_log = (
             f"Cancelled. We found {matched_count} out of {total} matches before stopping."
         )
@@ -191,10 +190,6 @@ def run_processing_tick() -> None:
             _ui_processing_debug("All pending entries processed; marking run complete.")
             st.session_state.processing = False
             st.session_state.process_complete = True
-            
-            # Close trackers
-            for tracker in st.session_state.get("batch_trackers", []):
-                asyncio.run(tracker.close())
             st.session_state.batch_trackers = []
 
             matched_count = len([r for r in st.session_state.results if r["Qobuz Link"]])
@@ -323,9 +318,8 @@ def render_results_and_exports(
                                         res["Status"] = str(res.get("Status", "✅ Matched")) + " | " + " | ".join(tracker_results)
                                 new_results.append(res)
                             st.session_state.results = new_results
-                        finally:
-                            for tracker in trackers:
-                                await tracker.close()
+                        except Exception as e:
+                            st.error(f"Error during manual check: {e}")
 
                     asyncio.run(run_manual_check())
                     status.update(label="Dupe check complete.", state="complete")
@@ -489,3 +483,44 @@ def render_results_and_exports(
             mime="text/plain",
         )
         st.text_area("Last Rip Log (tail)", value=log_text[-4000:], height=220)
+
+def run_tracker_diagnostic(artist: str, album: str, upc: Optional[str] = None) -> None:
+    """
+    Performs a one-off duplicate check for diagnostic purposes.
+    """
+    _ui_processing_debug(f"Running diagnostic check for: {artist} - {album} (UPC: {upc})")
+    
+    red_key = os.getenv("RED_API_KEY", "")
+    ops_key = os.getenv("OPS_API_KEY", "")
+    red_url = os.getenv("RED_URL", "https://redacted.sh").rstrip("/")
+    ops_url = os.getenv("OPS_URL", "https://orpheus.network").rstrip("/")
+    
+    trackers = []
+    if red_key:
+        trackers.append(GazelleAPI("RED", red_url, api_key=red_key))
+    if ops_key:
+        trackers.append(GazelleAPI("OPS", ops_url, api_key=ops_key))
+        
+    if not trackers:
+        st.error("No tracker API tokens found in .env. Configuration required.")
+        return
+
+    async def _do_diagnostic():
+        results = []
+        for tracker in trackers:
+            with st.spinner(f"Querying {tracker.site_name}..."):
+                is_dupe, message = await tracker.search_duplicates(artist, album, upc=upc)
+                results.append((tracker.site_name, is_dupe, message))
+        return results
+
+    diag_results = asyncio.run(_do_diagnostic())
+    
+    st.markdown("### 🔍 Diagnostic Results")
+    for site, is_dupe, msg in diag_results:
+        if is_dupe:
+            st.warning(f"**{site}:** 🚩 Dupe Detected! ({msg})")
+        else:
+            if "⚠️" in msg or "Error" in msg:
+                st.error(f"**{site}:** {msg}")
+            else:
+                st.success(f"**{site}:** ✅ No duplicate found. {msg}")
