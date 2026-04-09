@@ -3,6 +3,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from io import StringIO
+from typing import Optional
 
 import pandas as pd
 import streamlit as st
@@ -10,8 +11,9 @@ from dotenv import load_dotenv
 
 from app_modules.debug_logging import emit_debug
 from app_modules.filtering import build_filtered_entries, get_download_link
-from app_modules.matching import process_batch
+from app_modules.matching import process_batch, process_single_entry
 from app_modules.streamrip import export_qobuz_batches, run_streamrip_batches
+from logic.gazelle_api import GazelleAPI
 
 
 def _ui_processing_debug(message: str) -> None:
@@ -92,7 +94,23 @@ def handle_process_submission(
     st.session_state.total_entries = len(filtered_entries)
     st.session_state.current_index = 0
     st.session_state.processing = True
-    _ui_processing_debug(f"Queued {len(filtered_entries)} entries for async matching run.")
+    st.session_state.check_red = filter_config.get("check_red", False)
+    st.session_state.check_ops = filter_config.get("check_ops", False)
+    
+    # Initialize trackers if needed
+    st.session_state.batch_trackers = []
+    if st.session_state.check_red or st.session_state.check_ops:
+        red_key = os.getenv("RED_API_KEY", "")
+        ops_key = os.getenv("OPS_API_KEY", "")
+        red_url = os.getenv("RED_URL", "https://redacted.sh").rstrip("/")
+        ops_url = os.getenv("OPS_URL", "https://orpheus.network").rstrip("/")
+        
+        if st.session_state.check_red and red_key:
+            st.session_state.batch_trackers.append(GazelleAPI("RED", red_url, api_key=red_key))
+        if st.session_state.check_ops and ops_key:
+            st.session_state.batch_trackers.append(GazelleAPI("OPS", ops_url, api_key=ops_key))
+
+    _ui_processing_debug(f"Queued {len(filtered_entries)} entries for async matching run. Trackers: {len(st.session_state.batch_trackers)}")
     st.rerun()
 
 
@@ -119,7 +137,11 @@ def run_processing_tick() -> None:
         _ui_processing_debug("Cancellation requested; ending processing loop.")
         st.session_state.processing = False
         st.session_state.process_complete = False
+        
         matched_count = len([r for r in st.session_state.results if r["Qobuz Link"]])
+        detail_box.caption(
+            f"Current: Stopped | Matches found: {matched_count}"
+        )
         st.session_state.status_log = (
             f"Cancelled. We found {matched_count} out of {total} matches before stopping."
         )
@@ -144,7 +166,15 @@ def run_processing_tick() -> None:
                     f"Current: {status_text} | {album[:120]}"
                 )
 
-            batch_rows = asyncio.run(process_batch(batch, progress_callback=_on_batch_progress))
+            check_red_flag = st.session_state.get("check_red", False)
+            check_ops_flag = st.session_state.get("check_ops", False)
+            batch_trackers = st.session_state.get("batch_trackers", [])
+            batch_rows = asyncio.run(process_batch(
+                batch, 
+                progress_callback=_on_batch_progress, 
+                check_dupes=(check_red_flag or check_ops_flag),
+                existing_trackers=batch_trackers
+            ))
             st.session_state.results.extend(batch_rows)
             st.session_state.current_index = end_idx
             _ui_processing_debug(
@@ -160,6 +190,8 @@ def run_processing_tick() -> None:
             _ui_processing_debug("All pending entries processed; marking run complete.")
             st.session_state.processing = False
             st.session_state.process_complete = True
+            st.session_state.batch_trackers = []
+
             matched_count = len([r for r in st.session_state.results if r["Qobuz Link"]])
             st.session_state.status_log = f"Complete! We found {matched_count} out of {total} matches."
             status_box.success(st.session_state.status_log)
@@ -185,6 +217,7 @@ def render_results_and_exports(
     rip_codec: str,
     auto_rip_after_export: bool,
     streamrip_needs_setup: bool = False,
+    streamrip_missing_required_fields: list[str] | None = None,
 ) -> None:
     if st.session_state.is_dry_run_run:
         st.markdown("---")
@@ -244,7 +277,56 @@ def render_results_and_exports(
         width="stretch",
     )
 
-    matched_qobuz_urls = [r["Qobuz Link"] for r in st.session_state.results if r.get("Qobuz Link")]
+    # Check for manual dupe re-check
+    red_key = os.getenv("RED_API_KEY", "")
+    ops_key = os.getenv("OPS_API_KEY", "")
+    
+    if red_key or ops_key:
+        if st.button("Check Results for Dupes (RED/OPS)"):
+            with st.status("Checking existing results for duplicates...") as status:
+                # Initialize trackers
+                trackers = []
+                red_url = os.getenv("RED_URL", "https://redacted.sh").rstrip("/")
+                ops_url = os.getenv("OPS_URL", "https://orpheus.network").rstrip("/")
+                if red_key:
+                    trackers.append(GazelleAPI("RED", red_url, api_key=red_key))
+                if ops_key:
+                    trackers.append(GazelleAPI("OPS", ops_url, api_key=ops_key))
+                
+                if not trackers:
+                    st.warning("No tracker credentials found in .env.")
+                else:
+                    async def run_manual_check():
+                        new_results = []
+                        try:
+                            for idx, res in enumerate(st.session_state.results):
+                                if res.get("Qobuz Link") and "Dupe" not in str(res.get("Status", "")):
+                                    artist = res.get("Artist")
+                                    album = res.get("Album")
+                                    upc = res.get("UPC") 
+                                    
+                                    status.update(label=f"Checking {idx+1}/{len(st.session_state.results)}: {artist} - {album}...")
+                                    
+                                    tracker_results = []
+                                    for tracker in trackers:
+                                        is_dupe, info = await tracker.search_duplicates(artist, album, upc=upc)
+                                        if info:
+                                            # info now contains descriptive messages like "Dupe (UPC) @ RED"
+                                            tracker_results.append(info)
+                                    
+                                    if tracker_results:
+                                        res["Status"] = str(res.get("Status", "✅ Matched")) + " | " + " | ".join(tracker_results)
+                                new_results.append(res)
+                            st.session_state.results = new_results
+                        except Exception as e:
+                            st.error(f"Error during manual check: {e}")
+
+                    asyncio.run(run_manual_check())
+                    status.update(label="Dupe check complete.", state="complete")
+                    st.rerun()
+
+    valid_export_results = [r for r in st.session_state.results if r.get("Qobuz Link") and "Dupe (" not in str(r.get("Status", ""))]
+    matched_qobuz_urls = [r["Qobuz Link"] for r in valid_export_results]
     qobuz_strings = get_download_link([{"qobuz_url": url} for url in matched_qobuz_urls])
     if matched_qobuz_urls:
         st.download_button(
@@ -259,6 +341,14 @@ def render_results_and_exports(
     st.markdown("---")
     st.subheader("💾 Local Export & Batch Generator")
     st.markdown("Export on the left, or rip this run's matched Qobuz results on the right.")
+    missing_required_fields = list(streamrip_missing_required_fields or [])
+    missing_labels = {
+        "email_or_userid": "Qobuz Email or User ID",
+        "password_or_token": "Qobuz Password Hash or Auth Token",
+        "downloads_folder": "Downloads Folder Path",
+        "downloads_db_path": "Downloads DB Path",
+        "failed_downloads_path": "Failed Downloads Folder Path",
+    }
 
     col_exp1, col_exp2 = st.columns([1, 2])
     with col_exp1:
@@ -268,14 +358,35 @@ def render_results_and_exports(
         with btn_col1:
             export_btn = st.button("Export to Local Disk", type="primary")
         with btn_col2:
-            rip_this_run_btn = st.button("Rip This Run's Qobuz Results")
+            rip_this_run_btn = st.button(
+                "Rip This Run's Qobuz Results",
+                disabled=streamrip_needs_setup,
+                help=(
+                    "Disabled until required Streamrip settings are completed."
+                    if streamrip_needs_setup
+                    else "Run Streamrip immediately for this run's exported URLs."
+                ),
+            )
+
+    if streamrip_needs_setup:
+        labels = [missing_labels.get(f, f.replace("_", " ").title()) for f in missing_required_fields]
+        if labels:
+            st.warning("Rip is disabled. Missing settings: " + ", ".join(labels))
+        else:
+            st.warning("Rip is disabled. Streamrip setup is incomplete.")
+        if st.button("Open Streamrip Settings Tab", key="matcher_open_streamrip_settings"):
+            if missing_required_fields:
+                st.session_state.streamrip_setup_focus_field = missing_required_fields[0]
+            st.session_state.main_tab_selection_pending = "Streamrip Settings"
+            st.session_state.streamrip_setup_attention_message = "Finish the missing Streamrip settings to enable ripping."
+            st.rerun()
 
     if export_btn or rip_this_run_btn:
         _ui_processing_debug(
             f"Export/rip action clicked. export_btn={export_btn}, rip_this_run_btn={rip_this_run_btn}."
         )
         try:
-            valid_urls = [r["Qobuz Link"] for r in st.session_state.results if r["Qobuz Link"]]
+            valid_urls = [r["Qobuz Link"] for r in st.session_state.results if r.get("Qobuz Link") and "Dupe (" not in str(r.get("Status", ""))]
             if not valid_urls:
                 _ui_processing_debug("Export/rip action had no matched Qobuz URLs.")
                 st.warning("No matched Qobuz links found in this run.")
@@ -401,3 +512,44 @@ def render_results_and_exports(
             mime="text/plain",
         )
         st.text_area("Last Rip Log (tail)", value=log_text[-4000:], height=220)
+
+def run_tracker_diagnostic(artist: str, album: str, upc: Optional[str] = None) -> None:
+    """
+    Performs a one-off duplicate check for diagnostic purposes.
+    """
+    _ui_processing_debug(f"Running diagnostic check for: {artist} - {album} (UPC: {upc})")
+    
+    red_key = os.getenv("RED_API_KEY", "")
+    ops_key = os.getenv("OPS_API_KEY", "")
+    red_url = os.getenv("RED_URL", "https://redacted.sh").rstrip("/")
+    ops_url = os.getenv("OPS_URL", "https://orpheus.network").rstrip("/")
+    
+    trackers = []
+    if red_key:
+        trackers.append(GazelleAPI("RED", red_url, api_key=red_key))
+    if ops_key:
+        trackers.append(GazelleAPI("OPS", ops_url, api_key=ops_key))
+        
+    if not trackers:
+        st.error("No tracker API tokens found in .env. Configuration required.")
+        return
+
+    async def _do_diagnostic():
+        results = []
+        for tracker in trackers:
+            with st.spinner(f"Querying {tracker.site_name}..."):
+                is_dupe, message = await tracker.search_duplicates(artist, album, upc=upc)
+                results.append((tracker.site_name, is_dupe, message))
+        return results
+
+    diag_results = asyncio.run(_do_diagnostic())
+    
+    st.markdown("### 🔍 Diagnostic Results")
+    for site, is_dupe, msg in diag_results:
+        if is_dupe:
+            st.warning(f"**{site}:** 🚩 Dupe Detected! ({msg})")
+        else:
+            if "⚠️" in msg or "Error" in msg:
+                st.error(f"**{site}:** {msg}")
+            else:
+                st.success(f"**{site}:** ✅ No duplicate found. {msg}")
