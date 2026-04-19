@@ -55,10 +55,13 @@ def _publish_discovery_status(message: str, local_callback: Optional[Callable[[s
 
 def get_default_downloads_folder() -> str:
     home = os.path.expanduser("~")
-    music_folder = os.path.join(home, "Music")
-    if os.path.isdir(music_folder):
-        return music_folder
-    return home
+    ripped_music_folder = os.path.join(home, "Ripped_Music")
+    
+    # Check if the 'Ripped_Music' directory exists, and create it if not
+    if not os.path.isdir(ripped_music_folder):
+        os.makedirs(ripped_music_folder)
+    
+    return ripped_music_folder
 
 
 def is_streamrip_installed() -> bool:
