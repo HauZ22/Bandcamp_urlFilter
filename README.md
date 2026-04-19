@@ -1,102 +1,247 @@
 # Bandcamp to Qobuz Matcher
 
-A Python Streamlit application to filter Bandcamp URLs and find exact high-resolution matches on Qobuz.
+[![Docker Image](https://github.com/HauZ22/Bandcamp_urlFilter/actions/workflows/docker-image.yml/badge.svg)](https://github.com/HauZ22/Bandcamp_urlFilter/actions/workflows/docker-image.yml)
+[![GHCR](https://img.shields.io/badge/GHCR-bandcamp--urlfilter-2496ED?logo=docker&logoColor=white)](https://github.com/HauZ22/Bandcamp_urlFilter/pkgs/container/bandcamp-urlfilter)
+
+A Streamlit application for filtering Bandcamp release URLs, scraping release metadata, matching against Qobuz, and exporting links for downstream ripping or upload workflows.
+
+## Overview
 
 This tool helps you:
-- Filter Bandcamp URLs based on various criteria (genre, location, track count, pricing).
-- Scrape metadata from filtered Bandcamp releases.
-- Search for matching albums on Qobuz.
-- Export Qobuz links for matched albums.
 
-## 🚀 Features
+- filter Bandcamp URLs by genre, location, release date, track count, and price
+- parse both plain URL lists and enriched log-style input
+- scrape Bandcamp release metadata automatically
+- find exact or fuzzy Qobuz matches
+- export matched Qobuz URLs
+- run Streamrip directly from the UI
+- prepare downloaded releases for `smoked-salmon`
 
-- **Web-UI (Streamlit)**: User-friendly interface for easy interaction.
-- **Bandcamp URL Filtering**: Filter input URLs by genre/tag, location, release date range, minimum/maximum track count, and pricing (free/paid/all).
-- **Flexible Input Parsing**: Accepts both raw Bandcamp URL lists and enriched IRC/log-style lines.
-- **Bandcamp Metadata Scraping**: Automatically fetches artist, album title, track count, etc., from Bandcamp pages.
-- **Qobuz Matching**: Searches Qobuz for exact matches based on Bandcamp metadata.
-- **Fuzzy Matching**: Uses `rapidfuzz` for robust artist and album title matching.
-- **Export Qobuz Links**: Download a `.txt` file containing all matched Qobuz URLs.
-- **Direct Qobuz Rip Tab**: Paste or upload Qobuz links and rip them immediately with streamrip.
-- **Smoked Salmon Upload Tab**: Run `smoked-salmon` uploads for your downloaded release folders from inside the UI.
-- **Smoked Salmon Config Editor**: Edit and save smoked-salmon `config.toml` and run `health/checkconf/migrate` directly from the UI.
-- **Smoked Salmon Setup Assistant**: Checks required tools (`flac`, `sox`, `lame`, `mp3val`, `curl`, `git`) and auto-installs smoked-salmon with `uv` if missing.
-- **Dry Run Mode**: Apply Bandcamp filters without performing Qobuz searches, useful for quick filtering.
-- **Cross-platform Open Actions**: The `.env` helper button and exports folder button work on Windows, macOS, and Linux.
-## 🛠️ Installation
+## Features
 
-### Prerequisites
-- Python 3.10 or higher
-- `pip` package manager
-- Linux and macOS support
-- Works in Bash and Fish shells
+- `Streamlit` web UI
+- Bandcamp URL filtering and metadata scraping
+- Qobuz matching with `rapidfuzz`
+- Dry Run mode for filtering without Qobuz requests
+- export helpers for `streamrip`
+- direct Streamrip tab inside the app
+- Smoked Salmon setup, config editing, and upload helpers
+- launchers for Windows, macOS, and Linux shells
+- HostingByDesign-style user-service installer
+- Docker and Docker Compose support
 
-### Steps
-1. Clone or download the repository:
-   ```bash
-   git clone https://github.com/HauZ22/Bandcamp_urlFilter.git
-   cd Bandcamp_urlFilter
-   ```
+## Quick Start
 
-2. Create and activate a virtual environment (recommended):
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-   ```
+Docker Compose is the preferred way to run this project.
 
-3. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-   (You may need to create a `requirements.txt` file containing `streamlit`, `pandas`, `aiohttp`, `rapidfuzz`, `python-dotenv`, `beautifulsoup4`.)
+If you already have a Compose stack, add this service:
 
-## ⚙️ Configuration (Qobuz API)
-
-API credentials are required for Qobuz metadata search. Create a `.env` file in the main directory. This file is ignored by Git and contains sensitive data.
-
-Example of the `.env` file content:
-```env
-# Important: So that Python recognizes local directories (e.g., logic) as modules
-PYTHONPATH=.
-# Optional: Set your own Qobuz App ID. If omitted, the app auto-fetches it from Qobuz Web Player.
-# QOBUZ_APP_ID=
-# Required (depending on region/account type): Set your user Auth Token for Qobuz
-QOBUZ_USER_AUTH_TOKEN=your_qobuz_token_here
+```yaml
+services:
+  bandcamp-urlfilter:
+    image: ghcr.io/hauz22/bandcamp-urlfilter:latest
+    container_name: bandcamp-urlfilter
+    ports:
+      - "8501:8501"
+    environment:
+      QOBUZ_USER_AUTH_TOKEN: ${QOBUZ_USER_AUTH_TOKEN}
+      QOBUZ_APP_ID: ${QOBUZ_APP_ID:-}
+    volumes:
+      - ./exports:/app/exports
+      - ./docker-data/config:/config
+      - ./docker-data/downloads:/downloads
+    restart: unless-stopped
 ```
 
-## 📖 Usage
+Then create `.env` from [`.env.example`](.env.example), add your Qobuz token, and start it:
 
-1. Start the Streamlit application directly:
-   ```bash
-   python -m streamlit run app.py
-   ```
+```bash
+cp .env.example .env
+docker compose up -d
+```
 
-2. Or use the provided launch scripts. Each script will create a virtual environment if needed, install dependencies, and validate Qobuz settings:
-   - Bash: `./run.sh`
-   - Fish: `./run.fish`
-   - macOS (Finder-friendly): `./run.command`
-   - Windows: `run.bat`
+Open `http://localhost:8501`.
 
-### macOS first run (Gatekeeper)
-If macOS blocks `run.command` the first time, run:
+Persistent paths:
+
+- `./exports`
+- `./docker-data/config`
+- `./docker-data/downloads`
+
+If you want to use the repo's ready-made GHCR compose file instead of pasting a service into your own stack:
+
+```bash
+cp .env.example .env
+docker compose -f docker-compose.ghcr.yml up -d
+```
+
+More Docker details live in [docs/docker.md](docs/docker.md).
+
+## Configuration
+
+Create `.env` from [`.env.example`](.env.example):
+
+```bash
+cp .env.example .env
+```
+
+Example:
+
+```env
+PYTHONPATH=.
+# QOBUZ_APP_ID=
+QOBUZ_USER_AUTH_TOKEN=your_qobuz_token_here
+# Optional tracker/upload helpers:
+RED_API_KEY=
+RED_SESSION_COOKIE=
+# RED_URL=https://redacted.sh
+OPS_API_KEY=
+OPS_SESSION_COOKIE=
+# OPS_URL=https://orpheus.network
+```
+
+Notes:
+
+- `QOBUZ_USER_AUTH_TOKEN` is required for live Qobuz matching.
+- `QOBUZ_APP_ID` is optional. If it is missing, the app tries to discover it from the Qobuz web player.
+- tracker credentials are optional and only needed for duplicate checking / upload helper features
+- `.env` is ignored by Git.
+
+## Requirements
+
+- Python 3.10 or newer
+- `pip`
+- Git available on `PATH` if you install from `requirements.txt` because `streamrip` is pulled from GitHub
+
+Optional but useful for ripping/upload workflows:
+
+- `flac`
+- `sox`
+- `lame`
+- `mp3val`
+- `curl`
+- `git`
+- `uv` for installing `smoked-salmon`
+
+## Other Ways To Run
+
+If you do not want the default GHCR-based Docker Compose setup, these are the other supported paths.
+
+### Docker From This Checkout
+
+Build from this repository instead of using the published image:
+
+```bash
+cp .env.example .env
+docker compose up --build -d
+```
+
+The repo also includes:
+
+- [Dockerfile](Dockerfile)
+- [docker-compose.yml](docker-compose.yml)
+- [docker-compose.ghcr.yml](docker-compose.ghcr.yml)
+- [docker/entrypoint.sh](docker/entrypoint.sh)
+
+The compose services pick up `QOBUZ_APP_ID` and `QOBUZ_USER_AUTH_TOKEN` from your shell environment or the project `.env` file if present.
+
+Automated image publishing:
+
+- pull requests build the Docker image for validation
+- pushes to `main` or `master` publish `ghcr.io/hauz22/bandcamp-urlfilter:latest`
+- Git tags like `v1.2.3` publish matching version tags
+
+### Local Usage
+
+#### Fastest path
+
+- Linux: `./run.sh`
+- macOS: `./run.command`
+- Windows: `run.bat`
+
+Each launcher creates `.venv` if needed, installs dependencies, warns when Qobuz auth is missing, and starts Streamlit.
+
+#### Manual path
+
+```bash
+git clone https://github.com/HauZ22/Bandcamp_urlFilter.git
+cd Bandcamp_urlFilter
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python -m streamlit run app.py
+```
+
+On Windows, activate with:
+
+```powershell
+.venv\Scripts\activate
+```
+
+#### macOS first run
+
+If Finder blocks `run.command`:
+
 ```bash
 chmod +x run.command
 xattr -d com.apple.quarantine run.command
 ```
-Then run `./run.command` again (or double-click it in Finder).
 
-3. The application opens automatically in your web browser.
-4. Upload a `.txt` or `.log` file containing Bandcamp URLs (raw URLs or enriched log lines).
-5. Configure the filters in the sidebar.
-6. Click "Process" to filter the URLs and find Qobuz matches.
-7. Use "Stop / Cancel" to stop after the current in-flight batch and keep partial results.
+### HostingByDesign / App Box Setup
 
-## 🧾 Export
+[`setup-hbd.sh`](setup-hbd.sh) is the new Linux helper for boxes where you want a user-managed service instead of manually starting Streamlit every session.
 
-- After processing, use the export feature to write Qobuz links to `/exports/`.
-- The app generates both `run_rip.bat` and `run_rip.sh` so Windows, Linux, and macOS users can run the downloader script.
-- `streamrip` is included in `requirements.txt`; if not installed yet, run `pip install -r requirements.txt`.
-- For tracker uploads, install `smoked-salmon`:
-  ```bash
-  uv tool install git+https://github.com/smokin-salmon/smoked-salmon
-  ```
+Quick start:
+
+```bash
+chmod +x setup-hbd.sh
+./setup-hbd.sh
+```
+
+What it does:
+
+- creates a reusable virtualenv in `~/.config/venv/bandcamp-urlfilter`
+- installs dependencies
+- creates `.env` from `.env.example` if needed
+- chooses an available port
+- writes a user `systemd` service
+- enables and starts the service
+
+Useful options:
+
+```bash
+./setup-hbd.sh --port 8765
+./setup-hbd.sh --bind 0.0.0.0
+./setup-hbd.sh --no-start
+```
+
+More details live in [docs/hostingbydesign.md](docs/hostingbydesign.md).
+
+## In-App Workflow
+
+1. open the app in your browser
+2. upload a `.txt` or `.log` file containing Bandcamp URLs
+3. set your filters
+4. click `Process`
+5. export matched Qobuz URLs if needed
+6. optionally run Streamrip or Smoked Salmon from their UI tabs
+
+If you need to stop a run, use `Stop / Cancel` to finish the current in-flight batch and keep partial results.
+
+## Exports and Ripping
+
+- export files are written to `exports/`
+- the app generates `run_rip.sh` and `run_rip.bat` in the repo root; those helper scripts read the batch files from `exports/`
+- `streamrip` is included in `requirements.txt`
+- `smoked-salmon` can be installed with:
+
+```bash
+uv tool install git+https://github.com/smokin-salmon/smoked-salmon
+```
+
+## Script Reference
+
+See [docs/scripts.md](docs/scripts.md) for a summary of every launcher and helper script in the repo.
+
+
+

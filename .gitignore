@@ -47,3 +47,4 @@ run_rip.sh
 .codex
 exports/*.log
 .debug/
+docker-data/
