@@ -216,7 +216,10 @@ QOBUZ_USER_AUTH_TOKEN=
 RED_API_KEY=
 RED_SESSION_COOKIE=
 OPS_API_KEY=
-OPS_SESSION_COOKIE="""
+OPS_SESSION_COOKIE=
+# Optional tracker base URLs if you do not use the defaults
+# RED_URL=https://redacted.sh
+# OPS_URL=https://orpheus.network"""
         try:
             with open(env_path, "w", encoding="utf-8") as f:
                 f.write(template)
