@@ -30,6 +30,7 @@ from app_modules.ui_processing import (
     run_processing_tick,
 )
 from app_modules.ui_modal import (
+    close_qobuz_help_modal,
     init_qobuz_help_state,
     open_qobuz_help_modal,
     render_modal_base_styles,
@@ -206,6 +207,12 @@ main_tab = st.radio(
     label_visibility="collapsed",
 )
 _app_debug(f"Main tab selected: `{main_tab}`.")
+if main_tab != "Qobuz Settings" and (
+    st.session_state.get("qobuz_token_help_passphrase_open")
+    or st.session_state.get("qobuz_token_help_content_open")
+):
+    _app_debug("Closing Qobuz help modal because the active tab is no longer Qobuz Settings.")
+    close_qobuz_help_modal(clear_text=False)
 
 tag_input = ""
 exclude_tag_input = ""
@@ -360,8 +367,6 @@ if main_tab in {"Qobuz Settings", "Streamrip Settings", "Smoked Salmon Settings"
             else:
                 from app_modules.ui_processing import run_tracker_diagnostic
                 run_tracker_diagnostic(dbg_artist, dbg_album, dbg_upc)
-
-render_qobuz_help_modals()
 
 def _load_streamrip_runtime_state(
     status_callback=None,
@@ -837,6 +842,7 @@ if "streamrip_setup_attention_message" not in st.session_state:
     st.session_state.streamrip_setup_attention_message = ""
 
 if main_tab == "Qobuz Settings":
+    render_qobuz_help_modals()
     st.subheader("🔐 Qobuz Settings")
     st.caption("Manage Qobuz auth and view account/subscription details.")
 
