@@ -1,13 +1,12 @@
+from __future__ import annotations
+
 import asyncio
 import os
-import sys
-from datetime import datetime, timezone
 from io import StringIO
 from typing import Optional
 
 import pandas as pd
 import streamlit as st
-from dotenv import load_dotenv
 
 from app_modules.debug_logging import emit_debug
 from app_modules.filtering import build_filtered_entries, get_download_link
@@ -15,12 +14,15 @@ from app_modules.matching import process_batch
 from app_modules.streamrip import export_qobuz_batches, run_streamrip_batches
 from logic.gazelle_api import GazelleAPI
 
+UI_PROCESSING_LOG_TAIL_CHARS = 6000
+UI_PROCESSING_LOG_PREVIEW_CHARS = 4000
+
 
 def _ui_processing_debug(message: str) -> None:
     emit_debug("ui processing", message)
 
 
-def _read_log_tail(log_path: str, max_chars: int = 6000) -> str:
+def _read_log_tail(log_path: str, max_chars: int = UI_PROCESSING_LOG_TAIL_CHARS) -> str:
     try:
         with open(log_path, "r", encoding="utf-8", errors="replace") as f:
             text = f.read()
@@ -61,15 +63,20 @@ def handle_process_submission(
 
     stringio = StringIO(uploaded_file.getvalue().decode("utf-8", errors="ignore"))
     lines = stringio.readlines()
-    filtered_entries = build_filtered_entries(lines, filter_config, start_date, end_date)
+    filtered_entries, date_filter_stats = build_filtered_entries(lines, filter_config, start_date, end_date)
     _ui_processing_debug(
         f"Loaded {len(lines)} line(s); filtered down to {len(filtered_entries)} unique entry(ies). "
         f"dry_run={dry_run}"
     )
 
-    st.session_state.status_log = (
-        f"Found {len(filtered_entries)} unique URLs matching your filters out of {len(lines)} total lines."
-    )
+    status_log = f"Found {len(filtered_entries)} unique URLs matching your filters out of {len(lines)} total lines."
+    if date_filter_stats.get("date_filter_active"):
+        status_log += (
+            " "
+            f"Date filter excluded {date_filter_stats.get('date_filtered_out', 0)} entry(ies); "
+            f"{date_filter_stats.get('missing_release_date', 0)} had no release date and were kept."
+        )
+    st.session_state.status_log = status_log
 
     if not filtered_entries:
         _ui_processing_debug("No entries matched filters; stopping submission flow.")
@@ -83,7 +90,6 @@ def handle_process_submission(
         _ui_processing_debug("Dry run mode enabled; stored filtered entries and rerunning UI.")
         st.rerun()
 
-    load_dotenv(override=True)
     if not os.getenv("QOBUZ_USER_AUTH_TOKEN"):
         _ui_processing_debug("Process blocked: QOBUZ_USER_AUTH_TOKEN missing in env.")
         st.session_state.auto_scroll_alerts_once = True
@@ -231,6 +237,7 @@ def render_results_and_exports(
     auto_rip_after_export: bool,
     streamrip_needs_setup: bool = False,
     streamrip_missing_required_fields: list[str] | None = None,
+    streamrip_rip_disabled_reason: str = "",
 ) -> None:
     if st.session_state.is_dry_run_run:
         st.markdown("---")
@@ -378,18 +385,21 @@ def render_results_and_exports(
                 "Rip This Run's Qobuz Results",
                 disabled=streamrip_needs_setup,
                 help=(
-                    "Disabled until required Streamrip settings are completed."
+                    streamrip_rip_disabled_reason
                     if streamrip_needs_setup
                     else "Run Streamrip immediately for this run's exported URLs."
                 ),
             )
 
     if streamrip_needs_setup:
-        labels = [missing_labels.get(f, f.replace("_", " ").title()) for f in missing_required_fields]
-        if labels:
-            st.warning("Rip is disabled. Missing settings: " + ", ".join(labels))
-        else:
-            st.warning("Rip is disabled. Streamrip setup is incomplete.")
+        warning_reason = str(streamrip_rip_disabled_reason or "").strip()
+        if not warning_reason:
+            labels = [missing_labels.get(f, f.replace("_", " ").title()) for f in missing_required_fields]
+            if labels:
+                warning_reason = "Missing Streamrip settings: " + ", ".join(labels)
+            else:
+                warning_reason = "Streamrip setup is incomplete."
+        st.warning(f"Rip is disabled. {warning_reason}")
         if st.button("Open Streamrip Settings Tab", key="matcher_open_streamrip_settings"):
             if missing_required_fields:
                 st.session_state.streamrip_setup_focus_field = missing_required_fields[0]
@@ -418,7 +428,10 @@ def render_results_and_exports(
                         f"Successfully created {total_batches} batch file(s) in `/exports/` and generated `run_rip.bat` and `run_rip.sh`."
                     )
 
-                should_run_rip = bool(rip_this_run_btn or (export_btn and auto_rip_after_export))
+                should_run_rip = bool(
+                    rip_this_run_btn
+                    or (export_btn and auto_rip_after_export and not streamrip_needs_setup)
+                )
                 if should_run_rip:
                     if streamrip_needs_setup:
                         _ui_processing_debug("Auto/manual rip blocked because streamrip setup is incomplete.")
@@ -527,7 +540,7 @@ def render_results_and_exports(
             file_name="streamrip_last.log",
             mime="text/plain",
         )
-        st.text_area("Last Rip Log (tail)", value=log_text[-4000:], height=220)
+        st.text_area("Last Rip Log (tail)", value=log_text[-UI_PROCESSING_LOG_PREVIEW_CHARS:], height=220)
 
 def run_tracker_diagnostic(artist: str, album: str, upc: Optional[str] = None) -> None:
     """

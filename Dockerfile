@@ -22,20 +22,23 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd --create-home --shell /bin/bash appuser \
-    && mkdir -p /app /app/exports /config /downloads \
-    && chown -R appuser:appuser /app /config /downloads
+    && mkdir -p /app /app/exports /config /downloads
 
 WORKDIR /app
 
 COPY requirements.txt /app/requirements.txt
 RUN python -m pip install --upgrade pip \
-    && python -m pip install -r /app/requirements.txt
+    && python -m pip install -r /app/requirements.txt \
+    && apt-get purge -y --auto-remove git \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY . /app
 RUN chmod +x /app/docker/entrypoint.sh \
-    && chown -R appuser:appuser /app
+    && chown -R appuser:appuser /app /config /downloads
 
 USER appuser
+
+HEALTHCHECK CMD curl -f http://localhost:8501/_stcore/health || exit 1
 
 ENTRYPOINT ["/app/docker/entrypoint.sh"]
 CMD ["python", "-m", "streamlit", "run", "app.py"]

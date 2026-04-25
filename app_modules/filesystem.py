@@ -1,22 +1,21 @@
 import os
-import sys
 from datetime import datetime, timezone
-from typing import List
 
 from app_modules.debug_logging import emit_debug
+from app_modules.time_utils import format_app_datetime
 
 
 def _filesystem_debug(message: str) -> None:
     emit_debug("filesystem", message)
 
 
-def list_directory_entries(path: str) -> List[dict]:
+def list_directory_entries(path: str) -> list[dict]:
     _filesystem_debug(f"Listing directory entries for `{path}`.")
     if not os.path.isdir(path):
         _filesystem_debug("Path is not a directory; returning empty list.")
         return []
 
-    entries: List[dict] = []
+    entries: list[dict] = []
     try:
         with os.scandir(path) as scan:
             for entry in scan:
@@ -31,7 +30,13 @@ def list_directory_entries(path: str) -> List[dict]:
                         "path": entry.path,
                         "is_dir": is_dir,
                         "size": 0 if is_dir else int(stat_info.st_size),
-                        "modified": datetime.fromtimestamp(stat_info.st_mtime).strftime("%Y-%m-%d %H:%M"),
+                        "modified": format_app_datetime(
+                            datetime.fromtimestamp(
+                                stat_info.st_mtime,
+                                tz=timezone.utc,
+                            ),
+                            "%Y-%m-%d %H:%M",
+                        ),
                     }
                 )
     except Exception as e:

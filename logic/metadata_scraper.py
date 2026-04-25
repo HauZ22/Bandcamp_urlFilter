@@ -12,6 +12,26 @@ from logic.proxy_utils import proxy_request_kwargs
 
 logger = logging.getLogger(__name__)
 REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=20)
+SCRAPE_STATUS_SUCCESS = "success"
+SCRAPE_STATUS_FETCH_FAILED = "fetch_failed"
+SCRAPE_STATUS_JSON_LD_NOT_FOUND = "json_ld_not_found"
+SCRAPE_STATUS_ERROR = "error"
+
+
+def _scrape_result(status: str, url: str, **payload) -> dict:
+    result = {
+        "status": str(status or "").strip() or "error",
+        "error_msg": "",
+        "artist": "",
+        "album": "",
+        "track": "",
+        "track_count": 0,
+        "year": "",
+        "is_single": False,
+        "url": str(url or "").strip(),
+    }
+    result.update(payload)
+    return result
 
 
 class HostRateLimiter:
@@ -98,15 +118,15 @@ async def fetch_with_retries(
                     if attempt < max_retries - 1:
                         await asyncio.sleep(delay)
                 else:
-                    logger.warning(f"Failed to fetch {url}. Status: {response.status}")
+                    logger.warning("Failed to fetch %s. Status: %s", url, response.status)
                     return ""
         except asyncio.TimeoutError:
             delay = (base_delay * (2 ** attempt)) + random.uniform(0, base_delay * 0.35)
             logger.warning("Timeout fetching %s (attempt %s/%s). Waiting %.1fs...", url, attempt + 1, max_retries, delay)
             if attempt < max_retries - 1:
                 await asyncio.sleep(delay)
-        except Exception as e:
-            logger.error(f"Error fetching {url}: {e}")
+        except Exception as exc:
+            logger.error("Error fetching %s: %s", url, exc)
             return ""
             
     return ""
@@ -119,9 +139,16 @@ async def scrape_bandcamp_metadata(
     base_delay: float = 10.0,
     proxy: Optional[str] = None,
 ) -> dict:
-    html = await fetch_with_retries(session, url, max_retries=max_retries, base_delay=base_delay, rate_limiter=rate_limiter, proxy=proxy)
+    html = await fetch_with_retries(
+        session,
+        url,
+        max_retries=max_retries,
+        base_delay=base_delay,
+        rate_limiter=rate_limiter,
+        proxy=proxy,
+    )
     if not html:
-        return {}
+        return _scrape_result(SCRAPE_STATUS_FETCH_FAILED, url, error_msg="Could not fetch Bandcamp page.")
         
     try:
         soup = BeautifulSoup(html, 'html.parser')
@@ -131,7 +158,7 @@ async def scrape_bandcamp_metadata(
         if ld_json_tag:
             raw_json = ld_json_tag.string or ld_json_tag.get_text(strip=True)
             if not raw_json:
-                return {"status": "json_ld_not_found", "url": url}
+                return _scrape_result(SCRAPE_STATUS_JSON_LD_NOT_FOUND, url)
 
             data = json.loads(raw_json)
             
@@ -145,34 +172,35 @@ async def scrape_bandcamp_metadata(
                     num_tracks = item.get('numTracks', 0)
                     date_published = item.get('datePublished', '')
                     name = item.get('name', '')
-                    
-                    return {
-                        "artist": artist_name,
-                        "album": name,
-                        "track_count": num_tracks,
-                        "year": date_published.split()[0][:4] if date_published else "",
-                        "url": url,
-                        "status": "success"
-                    }
-                    
+
+                    return _scrape_result(
+                        SCRAPE_STATUS_SUCCESS,
+                        url,
+                        artist=artist_name,
+                        album=name,
+                        track_count=num_tracks,
+                        year=date_published.split()[0][:4] if date_published else "",
+                    )
+
                 # Handle single tracks if applicable
                 elif item.get('@type') == 'MusicRecording':
                     artist_obj = item.get('byArtist', {})
                     artist_name = artist_obj.get('name', '')
                     date_published = item.get('datePublished', '')
                     name = item.get('name', '')
-                    
-                    return {
-                        "artist": artist_name,
-                        "album": name, # It's a single track
-                        "track_count": 1,
-                        "year": date_published.split()[0][:4] if date_published else "",
-                        "url": url,
-                        "status": "success"
-                    }
-                    
-        return {"status": "json_ld_not_found", "url": url}
 
-    except Exception as e:
-        logger.error(f"Error parsing metadata for {url}: {e}")
-        return {"status": "error", "error_msg": str(e), "url": url}
+                    return _scrape_result(
+                        SCRAPE_STATUS_SUCCESS,
+                        url,
+                        artist=artist_name,
+                        track=name,
+                        track_count=1,
+                        year=date_published.split()[0][:4] if date_published else "",
+                        is_single=True,
+                    )
+
+        return _scrape_result(SCRAPE_STATUS_JSON_LD_NOT_FOUND, url)
+
+    except Exception as exc:
+        logger.error("Error parsing metadata for %s: %s", url, exc)
+        return _scrape_result(SCRAPE_STATUS_ERROR, url, error_msg=str(exc))

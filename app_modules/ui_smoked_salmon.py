@@ -1,25 +1,28 @@
 from io import StringIO
 import os
 import re
-import sys
-from datetime import datetime, timezone
 
 import streamlit as st
 
 from app_modules.debug_logging import emit_debug
-from app_modules.smoked_salmon import (
-    SALMON_SOURCE_OPTIONS,
+from app_modules.smoked_salmon_config import (
     apply_smoked_salmon_ai_review_settings,
-    check_smoked_salmon_setup,
     ensure_smoked_salmon_config_file,
     get_missing_tool_install_hints,
     get_smoked_salmon_config_path,
-    install_smoked_salmon_with_uv,
     read_smoked_salmon_config_text,
-    run_smoked_salmon_command,
-    run_smoked_salmon_uploads,
     save_smoked_salmon_config_text,
 )
+from app_modules.smoked_salmon_upload import (
+    SALMON_SOURCE_OPTIONS,
+    check_smoked_salmon_setup,
+    install_smoked_salmon_with_uv,
+    run_smoked_salmon_command,
+    run_smoked_salmon_uploads,
+)
+
+UI_SALMON_LOG_TAIL_CHARS = 6000
+UI_SALMON_LOG_PREVIEW_CHARS = 12000
 
 
 def _ui_salmon_debug(message: str) -> None:
@@ -32,7 +35,7 @@ def _read_text_upload(uploaded_file) -> str:
     return uploaded_file.getvalue().decode("utf-8", errors="ignore")
 
 
-def _read_log_tail(log_path: str, max_chars: int = 6000) -> str:
+def _read_log_tail(log_path: str, max_chars: int = UI_SALMON_LOG_TAIL_CHARS) -> str:
     try:
         with open(log_path, "r", encoding="utf-8") as f:
             text = f.read()
@@ -143,9 +146,9 @@ def render_smoked_salmon_tab(
                 margin: 0.4rem 0 1rem 0;
                 padding: 0.9rem 1rem;
                 border-radius: 10px;
-                border: 1px solid rgba(255,255,255,0.18);
-                background: linear-gradient(135deg, rgba(0,0,0,0.72), rgba(20,20,20,0.78));
-                color: #f2f2f2;
+                border: 1px solid rgba(128,128,128,0.25);
+                background: linear-gradient(135deg, rgba(255,191,71,0.14), rgba(80,140,255,0.08));
+                color: inherit;
                 font-weight: 600;
                 font-size: 3rem;
                 text-align: center;
@@ -301,6 +304,10 @@ def render_smoked_salmon_tab(
                             st.code(cmd, language="bash" if os.name != "nt" else "powershell")
                 if not status.get("has_salmon"):
                     st.error("`salmon` command is not detected.")
+                elif status.get("salmon_command_mode") == "path":
+                    st.info("Using `salmon` from PATH.")
+                elif status.get("salmon_command_mode") == "uv":
+                    st.info("Using `uv tool run salmon`.")
                 if status.get("has_uv"):
                     st.info(f"Detected uv executable: `{status.get('uv_command', '')}`")
                 else:
@@ -586,8 +593,8 @@ def render_smoked_salmon_tab(
                     live_spectral_links.markdown("\n".join([f"- {url}" for url in spectral_urls[:12]]))
                     try:
                         live_spectral_images.image(spectral_urls[:8], width=280)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _ui_salmon_debug(f"Could not render live spectral preview images: {exc}")
 
             with st.spinner("Running smoked-salmon uploads..."):
                 lossy_choice_map = {
@@ -636,6 +643,7 @@ def render_smoked_salmon_tab(
         st.caption(f"Last smoked-salmon log: {st.session_state.salmon_last_log_path}")
         with open(st.session_state.salmon_last_log_path, "r", encoding="utf-8") as f:
             log_text = f.read()
+        st.caption("Combined console output for all upload attempts in the last run.")
         st.download_button(
             "Download Smoked Salmon Log",
             data=log_text,
@@ -646,16 +654,24 @@ def render_smoked_salmon_tab(
         )
         st.text_area(
             "Smoked Salmon Log (tail)",
-            value=log_text[-4000:],
+            value=log_text[-UI_SALMON_LOG_PREVIEW_CHARS:],
             height=220,
             key="salmon_log_tail",
             disabled=locked,
         )
+        with st.expander("Show Full Console Log", expanded=False):
+            st.text_area(
+                "Smoked Salmon Log (full)",
+                value=log_text,
+                height=420,
+                key="salmon_log_full",
+                disabled=True,
+            )
         spectral_urls = _extract_spectral_urls(log_text)
         if spectral_urls:
             st.caption("Spectral/Lossy URLs detected in last log:")
             st.markdown("\n".join([f"- {url}" for url in spectral_urls[:20]]))
             try:
                 st.image(spectral_urls[:10], width=280)
-            except Exception:
-                pass
+            except Exception as exc:
+                _ui_salmon_debug(f"Could not render smoked-salmon spectral preview images: {exc}")

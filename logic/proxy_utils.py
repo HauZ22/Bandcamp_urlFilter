@@ -1,9 +1,10 @@
+from __future__ import annotations
+
 import os
 from typing import Any
 from urllib.parse import urlparse
 
 import aiohttp
-from dotenv import load_dotenv
 
 try:
     from aiohttp_socks import ProxyConnector
@@ -23,7 +24,6 @@ def get_proxy(service: str = "global") -> str | None:
 
     Format: http://user:pass@host:port  (or socks5://, https://)
     """
-    load_dotenv(override=True)
     global_proxy = os.getenv("GLOBAL_PROXY", "").strip() or None
     specific = os.getenv(f"{service.upper()}_PROXY", "").strip() or None
     return specific or global_proxy

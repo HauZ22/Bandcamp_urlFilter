@@ -52,6 +52,24 @@ services:
       APP_AUTH_ENABLED: ${APP_AUTH_ENABLED:-0}
       APP_AUTH_USERNAME: ${APP_AUTH_USERNAME:-}
       APP_AUTH_PASSWORD_HASH: ${APP_AUTH_PASSWORD_HASH:-}
+      APP_AUTH_SESSION_TTL_SECONDS: ${APP_AUTH_SESSION_TTL_SECONDS:-43200}
+      APP_AUTH_MAX_FAILURES: ${APP_AUTH_MAX_FAILURES:-5}
+      APP_AUTH_LOCKOUT_SECONDS: ${APP_AUTH_LOCKOUT_SECONDS:-900}
+      APP_AUTH_COOKIE_NAME: ${APP_AUTH_COOKIE_NAME:-bandcamp_urlfilter_auth_session}
+      APP_AUTH_COOKIE_SECURE: ${APP_AUTH_COOKIE_SECURE:-1}
+      APP_DEBUG_LOG_ENABLED: ${APP_DEBUG_LOG_ENABLED:-0}
+      APP_DEBUG_STDERR: ${APP_DEBUG_STDERR:-0}
+      APP_TIMEZONE: ${APP_TIMEZONE:-UTC}
+      RED_API_KEY: ${RED_API_KEY:-}
+      RED_SESSION_COOKIE: ${RED_SESSION_COOKIE:-}
+      RED_URL: ${RED_URL:-https://redacted.sh}
+      OPS_API_KEY: ${OPS_API_KEY:-}
+      OPS_SESSION_COOKIE: ${OPS_SESSION_COOKIE:-}
+      OPS_URL: ${OPS_URL:-https://orpheus.network}
+      GLOBAL_PROXY: ${GLOBAL_PROXY:-}
+      BANDCAMP_PROXY: ${BANDCAMP_PROXY:-}
+      QOBUZ_PROXY: ${QOBUZ_PROXY:-}
+      TRACKER_PROXY: ${TRACKER_PROXY:-}
     volumes:
       - ./exports:/app/exports
       - ./docker-data/config:/config
@@ -104,6 +122,11 @@ APP_AUTH_PASSWORD_HASH=
 APP_AUTH_SESSION_TTL_SECONDS=43200
 APP_AUTH_MAX_FAILURES=5
 APP_AUTH_LOCKOUT_SECONDS=900
+APP_AUTH_COOKIE_NAME=bandcamp_urlfilter_auth_session
+APP_AUTH_COOKIE_SECURE=1
+# Optional debug logging (disabled by default):
+APP_DEBUG_LOG_ENABLED=0
+APP_DEBUG_STDERR=0
 # Optional tracker/upload helpers:
 RED_API_KEY=
 RED_SESSION_COOKIE=
@@ -122,24 +145,26 @@ Notes:
 
 - `QOBUZ_USER_AUTH_TOKEN` is required for live Qobuz matching.
 - `QOBUZ_APP_ID` is optional. If it is missing, the app tries to discover it from the Qobuz web player.
-- `APP_AUTH_*` is optional, but strongly recommended if the app will be reachable on the public web.
+- `APP_AUTH_*` is optional, but strongly recommended if the app will be reachable on the public web. `APP_AUTH_COOKIE_NAME` lets you namespace the browser cookie when several apps share the same host.
+- Important auth limitation: because Streamlit does not expose a server-side `Set-Cookie` hook here, the built-in app auth cookie is synchronized from client-side JavaScript and therefore cannot be `HttpOnly`. Use HTTPS, keep `APP_AUTH_COOKIE_SECURE=1`, and prefer reverse-proxy or IdP-backed auth in front of the app for Internet-facing deployments.
 - Built-in app auth now expires authenticated sessions after 12 hours by default and locks sign-in after 5 failed attempts for 15 minutes.
+- `APP_TIMEZONE` is optional and controls user-facing timestamp display in the UI. It accepts IANA timezone names such as `UTC`, `Europe/Berlin`, or `America/New_York`. If omitted or invalid, the app falls back to `UTC`.
 - tracker credentials are optional and only needed for duplicate checking / upload helper features
 - proxy vars are all optional and off by default. `GLOBAL_PROXY` is the fallback for every service; service-specific vars (`BANDCAMP_PROXY`, `QOBUZ_PROXY`, `TRACKER_PROXY`) override it for that service only. Supported schemes: `http://`, `https://`, `socks5://`.
 - `.env` is ignored by Git.
 
 ## Requirements
 
-- Python 3.10 or newer
+- Python 3.9 to 3.13 for local launcher workflows
 - `pip`
 - Git available on `PATH` if you install from `requirements.txt` because `streamrip` is pulled from GitHub
 
 Python compatibility notes:
 
-- the core Streamlit app boots on Python 3.10+
+- the launchers target Python 3.9-3.13
 - the optional bundled `streamrip` CLI currently installs automatically on Python 3.10-3.13
-- on Python 3.14+, the app still runs, but `streamrip==2.2.0` is skipped because its current dependency set does not install cleanly there
-- if you need the in-app rip/download flow on Python 3.14+, use Docker or a Python 3.10-3.13 virtualenv for now
+- if only Python 3.14 is installed, `run.sh` and `setup-hbd.sh` now auto-bootstrap a userland `pyenv` Python (default `3.11.11`) unless you disable that fallback
+- if `pyenv` cannot build Python on your host, use Docker or point `PYTHON_BIN` at an existing Python 3.9-3.13 binary
 
 Optional but useful for ripping/upload workflows:
 
@@ -171,7 +196,7 @@ The repo also includes:
 - [docker-compose.ghcr.yml](docker-compose.ghcr.yml)
 - [docker/entrypoint.sh](docker/entrypoint.sh)
 
-The compose services pick up `QOBUZ_APP_ID`, `QOBUZ_USER_AUTH_TOKEN`, and optional `APP_AUTH_*` settings from your shell environment or the project `.env` file if present.
+The compose services now pass through every app env var from [`.env.example`](.env.example), so you can override them from your shell environment, the project `.env` file, or `docker compose --env-file ...`.
 
 Automated image publishing:
 
@@ -191,10 +216,10 @@ Each launcher creates `.venv` if needed, installs dependencies, warns when Qobuz
 
 Launcher notes:
 
-- `run.sh` uses `python` when available and falls back to `python3`
-- `run.bat` uses `python` and falls back to `py -3`
+- `run.sh`/`run.command` now prefer Python `3.13 -> 3.9`, then bootstrap `pyenv` if needed
+- `run.bat` now prefers installed `py -3.13 .. -3.9` runtimes (or `python` if already in range)
 - if an earlier failed bootstrap left behind a partial `.venv`, the launchers recreate it
-- on Python 3.14+, the app starts normally but the optional `streamrip` CLI is not installed automatically
+- `run.sh`/`setup-hbd.sh` avoid Python 3.14+ automatically and pick/build a compatible runtime
 
 #### Manual path
 
@@ -235,9 +260,8 @@ chmod +x setup-hbd.sh
 
 HostingByDesign note:
 
-- many HBD boxes expose `python3.9.2` by default, which is too old for this app
-- `setup-hbd.sh` first looks for `python3.10+` automatically
-- if it only finds Python 3.9 or nothing suitable on `PATH`, it now bootstraps `pyenv` in `~/.local/opt/pyenv` and builds a userland Python automatically
+- `setup-hbd.sh` looks for Python `3.13 -> 3.9` first
+- if it only finds Python 3.14+ or nothing suitable on `PATH`, it bootstraps `pyenv` in `~/.local/opt/pyenv` and builds a userland Python automatically
 - if your box has a newer interpreter at a specific name, run for example `PYTHON_BIN=python3.11 ./setup-hbd.sh`
 - if you do not want that fallback, run `./setup-hbd.sh --skip-pyenv-bootstrap`
 - `smoked-salmon` should still be installed separately with `uv`, which manages its own Python/runtime isolation
@@ -284,7 +308,7 @@ If you need to stop a run, use `Stop / Cancel` to finish the current in-flight b
 - export files are written to `exports/`
 - the app generates `run_rip.sh` and `run_rip.bat` in the repo root; those helper scripts read the batch files from `exports/`
 - `streamrip` is included in `requirements.txt`
-- on Python 3.14+, the repo skips installing the bundled `streamrip` CLI until upstream support lands
+- bundled `streamrip` install is enabled on Python 3.10-3.13
 - `smoked-salmon` can be installed with:
 
 ```bash
@@ -294,6 +318,3 @@ uv tool install git+https://github.com/smokin-salmon/smoked-salmon
 ## Script Reference
 
 See [docs/scripts.md](docs/scripts.md) for a summary of every launcher and helper script in the repo.
-
-
-
