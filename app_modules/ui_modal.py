@@ -1,7 +1,5 @@
 import base64
 import hashlib
-import sys
-from datetime import datetime, timezone
 
 import streamlit as st
 from app_modules.debug_logging import emit_debug
@@ -77,11 +75,20 @@ def init_qobuz_help_state() -> None:
         st.session_state.qobuz_token_help_error = ""
 
 
+def close_qobuz_help_modal(clear_text: bool = False) -> None:
+    _ui_modal_debug(f"Closing Qobuz help modal. clear_text={clear_text}.")
+    st.session_state.qobuz_token_help_passphrase_open = False
+    st.session_state.qobuz_token_help_content_open = False
+    st.session_state.qobuz_token_help_error = ""
+    st.session_state.pop("qobuz_token_passphrase_input", None)
+    if clear_text:
+        st.session_state.qobuz_token_help_text = ""
+
+
 def open_qobuz_help_modal() -> None:
     _ui_modal_debug("Opening Qobuz help passphrase modal.")
-    st.session_state.qobuz_token_help_error = ""
+    close_qobuz_help_modal(clear_text=True)
     st.session_state.qobuz_token_help_passphrase_open = True
-    st.session_state.qobuz_token_help_content_open = False
 
 
 def _decrypt_qobuz_help_text(passphrase: str) -> str:
@@ -245,7 +252,7 @@ def _render_qobuz_passphrase_modal() -> None:
     if dialog is None:
         _ui_modal_debug("Dialog API unavailable for passphrase modal.")
         st.error("This Streamlit version does not support modal dialogs.")
-        st.session_state.qobuz_token_help_passphrase_open = False
+        close_qobuz_help_modal(clear_text=True)
         return
 
     @dialog
@@ -276,6 +283,7 @@ def _render_qobuz_passphrase_modal() -> None:
                         _ui_modal_debug("Qobuz help passphrase accepted; opening content modal.")
                         st.session_state.qobuz_token_help_text = decrypted_text
                         st.session_state.qobuz_token_help_error = ""
+                        st.session_state.pop("qobuz_token_passphrase_input", None)
                         st.session_state.qobuz_token_help_passphrase_open = False
                         st.session_state.qobuz_token_help_content_open = True
                         st.rerun()
@@ -289,8 +297,7 @@ def _render_qobuz_passphrase_modal() -> None:
 
         if cancel_btn:
             _ui_modal_debug("Qobuz help passphrase modal canceled by user.")
-            st.session_state.qobuz_token_help_error = ""
-            st.session_state.qobuz_token_help_passphrase_open = False
+            close_qobuz_help_modal(clear_text=False)
             st.rerun()
 
     _modal()
@@ -302,7 +309,7 @@ def _render_qobuz_content_modal() -> None:
     if dialog is None:
         _ui_modal_debug("Dialog API unavailable for content modal.")
         st.error("This Streamlit version does not support modal dialogs.")
-        st.session_state.qobuz_token_help_content_open = False
+        close_qobuz_help_modal(clear_text=True)
         return
 
     @dialog
@@ -312,7 +319,7 @@ def _render_qobuz_content_modal() -> None:
         close_btn = st.button("Close", use_container_width=True)
         if close_btn:
             _ui_modal_debug("Qobuz help content modal closed.")
-            st.session_state.qobuz_token_help_content_open = False
+            close_qobuz_help_modal(clear_text=True)
             st.rerun()
 
     _modal()

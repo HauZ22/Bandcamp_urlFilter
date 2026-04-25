@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import re
@@ -8,11 +9,12 @@ import threading
 import time
 from datetime import datetime, timezone
 from typing import Any, Callable, List, Optional
-from urllib import error as urlerror
-from urllib import request as urlrequest
+from urllib.parse import urlparse
 
+import aiohttp
 from dotenv import load_dotenv
 from app_modules.debug_logging import emit_debug
+from logic.proxy_utils import create_connector_for_proxy, get_proxy, proxy_request_kwargs
 
 QUALITY_OPTIONS = [0, 1, 2, 3, 4]
 QUALITY_LABELS = {
@@ -38,6 +40,94 @@ def _streamrip_debug(message: str) -> None:
 
 def _bundle_debug(message: str) -> None:
     _streamrip_debug(f"[bundle] {message}")
+
+
+def _proxy_debug_summary(proxy: str | None) -> str:
+    if not proxy:
+        return "none"
+    parsed = urlparse(proxy)
+    scheme = (parsed.scheme or "unknown").lower()
+    return f"set ({scheme})"
+
+
+def _run_coroutine_sync(awaitable):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(awaitable)
+
+    result: list[Any] = []
+    error: list[BaseException] = []
+
+    def _runner() -> None:
+        try:
+            result.append(asyncio.run(awaitable))
+        except BaseException as exc:  # pragma: no cover - defensive bridge for UI runtimes
+            error.append(exc)
+
+    thread = threading.Thread(target=_runner, daemon=True)
+    thread.start()
+    thread.join()
+    if error:
+        raise error[0]
+    return result[0]
+
+
+async def _qobuz_request_bytes_async(
+    method: str,
+    url: str,
+    *,
+    headers: Optional[dict[str, str]] = None,
+    data: Optional[bytes] = None,
+    timeout_seconds: float = 15,
+) -> tuple[int, dict[str, str], bytes]:
+    proxy = get_proxy("qobuz")
+    proxy_summary = _proxy_debug_summary(proxy)
+    _streamrip_debug(f"Qobuz HTTP {method.upper()} {url} (proxy={proxy_summary}).")
+
+    connector = create_connector_for_proxy(proxy)
+    timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+    try:
+        async with aiohttp.ClientSession(connector=connector, trust_env=False) as session:
+            async with session.request(
+                method.upper(),
+                url,
+                headers=headers,
+                data=data,
+                timeout=timeout,
+                **proxy_request_kwargs(proxy),
+            ) as response:
+                body = await response.read()
+                _streamrip_debug(
+                    f"Qobuz HTTP {method.upper()} {url} -> {response.status} "
+                    f"({len(body):,} bytes, proxy={proxy_summary})."
+                )
+                return response.status, dict(response.headers), body
+    except Exception as e:
+        _streamrip_debug(
+            f"Qobuz HTTP {method.upper()} {url} failed "
+            f"(proxy={proxy_summary}): {e}"
+        )
+        raise
+
+
+def _qobuz_request_bytes(
+    method: str,
+    url: str,
+    *,
+    headers: Optional[dict[str, str]] = None,
+    data: Optional[bytes] = None,
+    timeout_seconds: float = 15,
+) -> tuple[int, dict[str, str], bytes]:
+    return _run_coroutine_sync(
+        _qobuz_request_bytes_async(
+            method,
+            url,
+            headers=headers,
+            data=data,
+            timeout_seconds=timeout_seconds,
+        )
+    )
 
 
 def _publish_discovery_status(message: str, local_callback: Optional[Callable[[str], None]] = None) -> None:
@@ -246,7 +336,8 @@ def discover_qobuz_app_id(status_callback=None) -> str:
             page_started_at = time.monotonic()
             _publish_discovery_status("Fetching Qobuz web player page...", local_callback=status_callback)
             _bundle_debug("Requesting https://play.qobuz.com/ ...")
-            req = urlrequest.Request(
+            status, _, body = _qobuz_request_bytes(
+                "GET",
                 "https://play.qobuz.com/",
                 headers={
                     "user-agent": (
@@ -254,17 +345,17 @@ def discover_qobuz_app_id(status_callback=None) -> str:
                         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36"
                     )
                 },
+                timeout_seconds=12,
             )
-            with urlrequest.urlopen(req, timeout=12) as response:
-                if response.getcode() != 200:
-                    _bundle_debug(f"Web player page request failed with HTTP {response.getcode()}.")
-                    return ""
-                _bundle_debug(
-                    f"Web player page fetched with HTTP {response.getcode()} in {time.monotonic() - page_started_at:.3f}s."
-                )
-                html = response.read().decode("utf-8", errors="replace")
-        except Exception:
-            _bundle_debug("Exception while fetching Qobuz web player page.")
+            if status != 200:
+                _bundle_debug(f"Web player page request failed with HTTP {status}.")
+                return ""
+            _bundle_debug(
+                f"Web player page fetched with HTTP {status} in {time.monotonic() - page_started_at:.3f}s."
+            )
+            html = body.decode("utf-8", errors="replace")
+        except Exception as e:
+            _bundle_debug(f"Exception while fetching Qobuz web player page: {e}")
             return ""
 
         _publish_discovery_status("Extracting bundle.js URL from player page...", local_callback=status_callback)
@@ -278,7 +369,8 @@ def discover_qobuz_app_id(status_callback=None) -> str:
         try:
             request_started_at = time.monotonic()
             _publish_discovery_status("Preparing bundle.js request...", local_callback=status_callback)
-            req = urlrequest.Request(
+            status, response_headers, raw_js = _qobuz_request_bytes(
+                "GET",
                 bundle_url,
                 headers={
                     "user-agent": (
@@ -286,86 +378,39 @@ def discover_qobuz_app_id(status_callback=None) -> str:
                         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36"
                     )
                 },
+                timeout_seconds=12,
             )
             _publish_discovery_status("Opening connection to Qobuz bundle.js...", local_callback=status_callback)
             _bundle_debug("Opening bundle.js connection...")
-            with urlrequest.urlopen(req, timeout=12) as response:
-                if response.getcode() != 200:
-                    _bundle_debug(f"bundle.js request failed with HTTP {response.getcode()}.")
-                    return ""
-                _bundle_debug(
-                    f"bundle.js response opened with HTTP {response.getcode()} in {time.monotonic() - request_started_at:.3f}s."
+            if status != 200:
+                _bundle_debug(f"bundle.js request failed with HTTP {status}.")
+                return ""
+            _bundle_debug(
+                f"bundle.js response opened with HTTP {status} in {time.monotonic() - request_started_at:.3f}s."
+            )
+            _publish_discovery_status("Reading Qobuz bundle.js response headers...", local_callback=status_callback)
+            content_length_header = response_headers.get("Content-Length", "").strip()
+            expected_bytes = int(content_length_header) if content_length_header.isdigit() else 0
+            _bundle_debug(
+                f"bundle.js headers read. Content-Length={expected_bytes if expected_bytes > 0 else 'unknown'}."
+            )
+            downloaded_bytes = len(raw_js)
+            _publish_discovery_status("Decoding Qobuz bundle.js content...", local_callback=status_callback)
+            decode_started_at = time.monotonic()
+            js = raw_js.decode("utf-8", errors="replace")
+            _bundle_debug(
+                f"bundle.js decoded in {time.monotonic() - decode_started_at:.3f}s "
+                f"(downloaded={downloaded_bytes:,} bytes, decoded length={len(js):,} chars)."
+            )
+            if expected_bytes > 0:
+                _publish_discovery_status(
+                    f"Bundle.js download complete ({downloaded_bytes:,}/{expected_bytes:,} bytes).",
+                    local_callback=status_callback,
                 )
-                _publish_discovery_status("Reading Qobuz bundle.js response headers...", local_callback=status_callback)
-                content_length_header = response.headers.get("Content-Length", "").strip()
-                expected_bytes = int(content_length_header) if content_length_header.isdigit() else 0
-                _bundle_debug(
-                    f"bundle.js headers read. Content-Length={expected_bytes if expected_bytes > 0 else 'unknown'}."
-                )
-
-                if expected_bytes > 0:
-                    _publish_discovery_status(
-                        f"Starting bundle.js download (expected {expected_bytes:,} bytes)...",
-                        local_callback=status_callback,
-                    )
-                else:
-                    _publish_discovery_status("Starting bundle.js download (size unknown)...", local_callback=status_callback)
-
-                chunks: list[bytes] = []
-                downloaded_bytes = 0
-                report_every_bytes = 256 * 1024
-                next_report_at = report_every_bytes
-                download_started_at = time.monotonic()
-                while True:
-                    chunk = response.read(64 * 1024)
-                    if not chunk:
-                        break
-                    chunks.append(chunk)
-                    downloaded_bytes += len(chunk)
-                    if downloaded_bytes >= next_report_at:
-                        if expected_bytes > 0:
-                            percent = (downloaded_bytes / expected_bytes) * 100
-                            elapsed = max(0.001, time.monotonic() - download_started_at)
-                            speed_bps = downloaded_bytes / elapsed
-                            remaining_bytes = max(0, expected_bytes - downloaded_bytes)
-                            eta_text = ""
-                            if speed_bps > 0 and remaining_bytes > 0:
-                                eta_text = f" | ETA {format_eta(remaining_bytes / speed_bps)}"
-                            _publish_discovery_status(
-                                f"Downloading bundle.js... {downloaded_bytes:,}/{expected_bytes:,} bytes ({percent:.1f}%){eta_text}"
-                                ,
-                                local_callback=status_callback,
-                            )
-                        else:
-                            _publish_discovery_status(
-                                f"Downloading bundle.js... {downloaded_bytes:,} bytes",
-                                local_callback=status_callback,
-                            )
-                        next_report_at += report_every_bytes
-
-                raw_js = b"".join(chunks)
-                download_elapsed = max(0.001, time.monotonic() - download_started_at)
-                avg_speed_mib_s = (downloaded_bytes / download_elapsed) / (1024 * 1024)
-                _bundle_debug(
-                    f"bundle.js download complete: {downloaded_bytes:,} bytes in {download_elapsed:.3f}s "
-                    f"(avg {avg_speed_mib_s:.2f} MiB/s)."
-                )
-                if expected_bytes > 0:
-                    _publish_discovery_status(
-                        f"Bundle.js download complete ({downloaded_bytes:,}/{expected_bytes:,} bytes).",
-                        local_callback=status_callback,
-                    )
-                else:
-                    _publish_discovery_status(
-                        f"Bundle.js download complete ({downloaded_bytes:,} bytes).",
-                        local_callback=status_callback,
-                    )
-                _publish_discovery_status("Decoding Qobuz bundle.js content...", local_callback=status_callback)
-                decode_started_at = time.monotonic()
-                js = raw_js.decode("utf-8", errors="replace")
-                _bundle_debug(
-                    f"bundle.js decoded in {time.monotonic() - decode_started_at:.3f}s "
-                    f"(decoded length={len(js):,} chars)."
+            else:
+                _publish_discovery_status(
+                    f"Bundle.js download complete ({downloaded_bytes:,} bytes).",
+                    local_callback=status_callback,
                 )
         except Exception as e:
             _bundle_debug(f"Exception while downloading/decoding bundle.js: {e}")
@@ -712,9 +757,16 @@ def _parse_qobuz_datetime(value: Any) -> Optional[datetime]:
 def _qobuz_login_payload(app_id: str, user_token: str) -> tuple[bool, dict, str]:
     app_id = str(app_id).strip()
     user_token = str(user_token).strip()
+    proxy_summary = _proxy_debug_summary(get_proxy("qobuz"))
     if not app_id or not user_token:
         _streamrip_debug("Cannot query Qobuz login API; app ID or token missing.")
-        return False, {}, "Need both Qobuz App ID and user auth token."
+        missing_fields = []
+        if not app_id:
+            missing_fields.append("Qobuz App ID")
+        if not user_token:
+            missing_fields.append("Qobuz user auth token")
+        missing_text = ", ".join(missing_fields) if missing_fields else "credentials"
+        return False, {}, f"Need {missing_text} (proxy={proxy_summary})."
 
     url = "https://www.qobuz.com/api.json/0.2/user/login"
     headers = {
@@ -726,29 +778,29 @@ def _qobuz_login_payload(app_id: str, user_token: str) -> tuple[bool, dict, str]
         "x-user-auth-token": user_token,
     }
     payload = b"extra=partner"
-    request = urlrequest.Request(url, data=payload, headers=headers, method="POST")
 
     try:
-        with urlrequest.urlopen(request, timeout=15) as response:
-            status = response.getcode()
-            body = response.read().decode("utf-8", errors="replace")
-    except urlerror.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
-        _streamrip_debug(f"Qobuz account lookup HTTP error: {e.code}")
-        return False, {}, f"Qobuz lookup failed with HTTP {e.code}: {body[:180]}"
+        status, _, response_body = _qobuz_request_bytes(
+            "POST",
+            url,
+            headers=headers,
+            data=payload,
+            timeout_seconds=15,
+        )
+        body = response_body.decode("utf-8", errors="replace")
     except Exception as e:
         _streamrip_debug(f"Qobuz account lookup request failed: {e}")
-        return False, {}, f"Qobuz lookup failed: {e}"
+        return False, {}, f"Qobuz lookup failed (proxy={proxy_summary}): {e}"
 
     if status != 200:
         _streamrip_debug(f"Qobuz account lookup returned non-200 status: {status}")
-        return False, {}, f"Qobuz lookup failed with HTTP {status}: {body[:180]}"
+        return False, {}, f"Qobuz lookup failed with HTTP {status} (proxy={proxy_summary}): {body[:180]}"
 
     try:
         data = json.loads(body)
     except json.JSONDecodeError:
         _streamrip_debug("Qobuz account lookup returned non-JSON body.")
-        return False, {}, "Qobuz response was not valid JSON."
+        return False, {}, f"Qobuz response was not valid JSON (proxy={proxy_summary})."
     return True, data if isinstance(data, dict) else {}, "Fetched Qobuz account info."
 
 

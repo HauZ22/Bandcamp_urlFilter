@@ -19,10 +19,19 @@ from app_modules.streamrip import (
     save_streamrip_settings,
     upsert_env_values,
 )
+from logic.proxy_utils import get_proxy
 
 
 def _setup_debug(message: str) -> None:
     emit_debug("streamrip setup", message)
+
+
+def _proxy_debug_summary(proxy: str) -> str:
+    proxy_text = str(proxy or "").strip()
+    if not proxy_text:
+        return "none"
+    scheme = proxy_text.split("://", 1)[0].lower() if "://" in proxy_text else "configured"
+    return f"set ({scheme})"
 
 
 def init_streamrip_form_state(
@@ -300,71 +309,7 @@ def render_streamrip_setup(
                         _setup_debug("Auto-fill save failed.")
                         _show_error(msg)
             with col_setup2:
-                if st.button(
-                    "Fetch User ID / Email",
-                    help="Calls Qobuz login API with your token/app ID and writes the detected account identifier into config.",
-                    key=_k("fetch_user_btn"),
-                ):
-                    _setup_debug("Fetch User ID / Email button clicked.")
-                    current_email = str(st.session_state.get("streamrip_form_email_or_userid", ""))
-                    current_token = str(st.session_state.get("streamrip_form_password_or_token", ""))
-                    current_app_id = str(st.session_state.get("streamrip_form_app_id", ""))
-                    current_quality = int(st.session_state.get("streamrip_form_quality", default_rip_quality))
-                    current_codec = str(st.session_state.get("streamrip_form_codec", default_codec))
-                    current_downloads = str(
-                        st.session_state.get(
-                            "streamrip_form_downloads_folder",
-                            st.session_state.streamrip_downloads_folder_draft,
-                        )
-                    )
-                    current_downloads_db_path = str(
-                        st.session_state.get("streamrip_form_downloads_db_path", "")
-                    )
-                    current_failed_downloads_path = str(
-                        st.session_state.get("streamrip_form_failed_downloads_path", "")
-                    )
-
-                    token_for_lookup = current_token or env_qobuz_token
-                    app_id_for_lookup = current_app_id or env_qobuz_app_id
-                    ok_lookup, lookup_data, lookup_msg = fetch_qobuz_user_identifier(
-                        app_id_for_lookup, token_for_lookup
-                    )
-                    if not ok_lookup:
-                        _setup_debug(f"Fetch user identifier failed: {lookup_msg}")
-                        _show_error(lookup_msg)
-                    else:
-                        save_ok, save_msg = save_streamrip_settings(
-                            streamrip_config_path,
-                            use_auth_token=True,
-                            email_or_userid=str(lookup_data.get("identifier", current_email)),
-                            password_or_token=token_for_lookup,
-                            app_id=app_id_for_lookup,
-                            quality=current_quality,
-                            codec_selection=current_codec,
-                            downloads_folder=current_downloads,
-                            downloads_db_path=current_downloads_db_path,
-                            failed_downloads_path=current_failed_downloads_path,
-                        )
-                        if save_ok:
-                            env_updates: dict[str, str] = {}
-                            if str(token_for_lookup or "").strip():
-                                env_updates["QOBUZ_USER_AUTH_TOKEN"] = str(token_for_lookup).strip()
-                            if str(app_id_for_lookup or "").strip():
-                                env_updates["QOBUZ_APP_ID"] = str(app_id_for_lookup).strip()
-                            env_ok, env_msg = upsert_env_values(".env", env_updates)
-                            _setup_debug("Fetched user identifier and saved config successfully.")
-                            st.success(
-                                f"{lookup_msg}: {lookup_data.get('identifier', '')}. "
-                                "Saved to streamrip config."
-                            )
-                            if env_ok:
-                                st.rerun()
-                            else:
-                                _setup_debug(f"Fetched identifier saved, but .env sync failed: {env_msg}")
-                                st.warning(f"Saved Streamrip config, but could not sync `.env`: {env_msg}")
-                        else:
-                            _setup_debug(f"Saving fetched user identifier failed: {save_msg}")
-                            _show_error(save_msg)
+                st.info("Use the form submit below to fetch the Qobuz user ID/email from the values currently typed into the form.")
             with col_setup3:
                 if st.button(
                     "Reload Streamrip Config",
@@ -373,6 +318,11 @@ def render_streamrip_setup(
                 ):
                     _setup_debug("Reload Streamrip Config button clicked; rerunning app.")
                     st.rerun()
+
+            st.caption(
+                "Qobuz network route for lookup requests: "
+                f"`{_proxy_debug_summary(get_proxy('qobuz'))}`."
+            )
 
             if include_browser:
                 _render_download_folder_browser()
@@ -456,11 +406,86 @@ def render_streamrip_setup(
                             key=codec_widget_key,
                             help="Default output codec conversion applied by Streamrip after download.",
                         )
-                save_streamrip_btn = st.form_submit_button(
-                    "Save Streamrip Config",
-                    type="primary",
-                    help="Writes all values in this form (credentials, downloads folder, quality, codec) to streamrip config.toml.",
+                action_col1, action_col2 = st.columns(2)
+                with action_col1:
+                    fetch_user_btn = st.form_submit_button(
+                        "Fetch User ID / Email",
+                        help="Calls Qobuz login API with the values currently entered in this form and writes the detected account identifier into config.",
+                    )
+                with action_col2:
+                    save_streamrip_btn = st.form_submit_button(
+                        "Save Streamrip Config",
+                        type="primary",
+                        help="Writes all values in this form (credentials, downloads folder, quality, codec) to streamrip config.toml.",
+                    )
+
+            if fetch_user_btn:
+                _setup_debug("Fetch User ID / Email submitted from setup form.")
+                selected_quality = cfg_quality if cfg_quality is not None else default_rip_quality
+                if selected_quality not in QUALITY_OPTIONS:
+                    selected_quality = default_rip_quality
+                selected_codec = cfg_codec if cfg_codec is not None else default_codec
+                if selected_codec not in CODEC_OPTIONS:
+                    selected_codec = default_codec
+
+                token_for_lookup = str(password_or_token_cfg or "").strip() or str(env_qobuz_token or "").strip()
+                app_id_for_lookup = str(app_id_cfg or "").strip() or str(env_qobuz_app_id or "").strip()
+                current_email = str(email_or_userid_cfg or "").strip()
+                current_downloads = str(downloads_folder_cfg or "").strip()
+                current_downloads_db_path = str(downloads_db_path_cfg or "").strip()
+                current_failed_downloads_path = str(failed_downloads_path_cfg or "").strip()
+
+                ok_lookup, lookup_data, lookup_msg = fetch_qobuz_user_identifier(
+                    app_id_for_lookup,
+                    token_for_lookup,
                 )
+                if not ok_lookup:
+                    _setup_debug(f"Fetch user identifier failed: {lookup_msg}")
+                    _show_error(lookup_msg)
+                else:
+                    save_ok, save_msg = save_streamrip_settings(
+                        streamrip_config_path,
+                        use_auth_token=True,
+                        email_or_userid=str(lookup_data.get("identifier", current_email)),
+                        password_or_token=token_for_lookup,
+                        app_id=app_id_for_lookup,
+                        quality=selected_quality,
+                        codec_selection=selected_codec,
+                        downloads_folder=current_downloads,
+                        downloads_db_path=current_downloads_db_path,
+                        failed_downloads_path=current_failed_downloads_path,
+                    )
+                    if save_ok:
+                        env_updates: dict[str, str] = {}
+                        if token_for_lookup:
+                            env_updates["QOBUZ_USER_AUTH_TOKEN"] = token_for_lookup
+                        if app_id_for_lookup:
+                            env_updates["QOBUZ_APP_ID"] = app_id_for_lookup
+                        env_ok, env_msg = upsert_env_values(".env", env_updates)
+                        _setup_debug("Fetched user identifier and saved config successfully.")
+                        st.session_state.streamrip_form_use_auth_token = True
+                        st.session_state.streamrip_form_email_or_userid = str(
+                            lookup_data.get("identifier", current_email)
+                        )
+                        st.session_state.streamrip_form_password_or_token = token_for_lookup
+                        st.session_state.streamrip_form_app_id = app_id_for_lookup
+                        st.session_state.streamrip_form_downloads_folder = current_downloads
+                        st.session_state.streamrip_form_downloads_db_path = current_downloads_db_path
+                        st.session_state.streamrip_form_failed_downloads_path = current_failed_downloads_path
+                        st.session_state.streamrip_form_quality = selected_quality
+                        st.session_state.streamrip_form_codec = selected_codec
+                        st.success(
+                            f"{lookup_msg}: {lookup_data.get('identifier', '')}. "
+                            "Saved to streamrip config."
+                        )
+                        if env_ok:
+                            st.rerun()
+                        else:
+                            _setup_debug(f"Fetched identifier saved, but .env sync failed: {env_msg}")
+                            st.warning(f"Saved Streamrip config, but could not sync `.env`: {env_msg}")
+                    else:
+                        _setup_debug(f"Saving fetched user identifier failed: {save_msg}")
+                        _show_error(save_msg)
 
             if save_streamrip_btn:
                 _setup_debug("Save Streamrip Config submitted.")
