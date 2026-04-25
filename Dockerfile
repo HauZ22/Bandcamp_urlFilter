@@ -15,6 +15,7 @@ RUN apt-get update \
         ca-certificates \
         curl \
         flac \
+        git \
         lame \
         mp3val \
         sox \
@@ -26,9 +27,7 @@ RUN useradd --create-home --shell /bin/bash appuser \
 WORKDIR /app
 
 COPY requirements.txt /app/requirements.txt
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends git \
-    && python -m pip install --upgrade pip \
+RUN python -m pip install --upgrade pip \
     && python -m pip install -r /app/requirements.txt \
     && apt-get purge -y --auto-remove git \
     && rm -rf /var/lib/apt/lists/*

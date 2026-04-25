@@ -12,11 +12,29 @@ from app_modules.debug_logging import emit_debug
 
 SALMON_SOURCE_OPTIONS = ["WEB", "CD", "VINYL", "SOUNDBOARD", "SACD", "DAT", "CASSETTE"]
 SALMON_REQUIRED_TOOLS = ["flac", "sox", "lame", "mp3val", "curl", "git"]
+SALMON_LOG_TAIL_CHARS = 6000
+SALMON_PROMPT_SCAN_BUFFER_CHARS = 20000
+SALMON_UPLOAD_TIMEOUT_SECONDS = 3600
+SALMON_UV_INSTALL_TIMEOUT_SECONDS = 900
+DEFAULT_SMOKED_SALMON_PROMPT_RESPONSES: Dict[str, str] = {
+    "24bit detected. do you want to check whether might be upconverted?": "y\n",
+    "possible upconverts detected. would you like to quit uploading?": "n\n",
+    "log file crc does not match audio files. do you want to continue upload anyway?": "y\n",
+    "do you want to sanitize this upload?": "y\n",
+    "would you like to upload the torrent? (no to re-run metadata section)": "y\n",
+    "would you like to check downconversion options?": "y\n",
+    "select formats to convert": "*\n",
+    "confirm selection?": "y\n",
+    "are there any metadata fields you would like to edit?": "n\n",
+    "would you like to auto-tag the files with the updated metadata?": "y\n",
+    "would you like to rename the files?": "y\n",
+    "would you like to replace the original folder name?": "y\n",
+    "is the new folder name acceptable? ([n] to edit)": "y\n",
+}
 
 
 def _salmon_debug(message: str) -> None:
     emit_debug("smoked-salmon", message)
-
 
 def get_smoked_salmon_config_path() -> str:
     _salmon_debug("Resolving smoked-salmon config path.")
@@ -68,7 +86,7 @@ def ensure_smoked_salmon_config_file(config_path: str) -> tuple[bool, str]:
         return True, boot_msg
     _salmon_debug("Failed to create smoked-salmon config via template and bootstrap paths.")
     return False, (
-        "Could not find smoked-salmon default template (`src/salmon/data/config.default.toml`) "
+        "Could not find smoked-salmon default template (`salmon/data/config.default.toml`) "
         "and could not auto-generate config via `salmon`."
     )
 
@@ -244,12 +262,18 @@ def check_smoked_salmon_setup() -> dict:
     missing_tools = [tool for tool in SALMON_REQUIRED_TOOLS if not shutil.which(tool)]
     uv_bin = resolve_uv_command()
     salmon_cmd = resolve_smoked_salmon_command()
+    command_mode = ""
+    if salmon_cmd[:3] == [uv_bin, "tool", "run"] if uv_bin else False:
+        command_mode = "uv"
+    elif salmon_cmd:
+        command_mode = "path"
 
     result = {
         "config_path": config_path,
         "config_exists": os.path.exists(config_path),
         "has_uv": bool(uv_bin),
         "uv_command": uv_bin,
+        "salmon_command_mode": command_mode,
         "salmon_command": salmon_cmd,
         "has_salmon": bool(salmon_cmd),
         "missing_required_tools": missing_tools,
@@ -281,12 +305,15 @@ def _detect_linux_distro() -> str:
 
 def find_smoked_salmon_default_config_template_path() -> str:
     _salmon_debug("Searching for smoked-salmon default config template path.")
-    # Prefer canonical source-tree location requested by user:
-    # src/salmon/data/config.default.toml
     candidates = [
+        os.path.abspath(os.path.join("salmon", "data", "config.default.toml")),
         os.path.abspath(os.path.join("src", "salmon", "data", "config.default.toml")),
         os.path.abspath(os.path.join(".smoked-salmon", "src", "salmon", "data", "config.default.toml")),
-        os.path.abspath(os.path.join(os.path.expanduser("~"), ".smoked-salmon", "src", "salmon", "data", "config.default.toml")),
+        os.path.abspath(os.path.join(".smoked-salmon", "salmon", "data", "config.default.toml")),
+        os.path.abspath(
+            os.path.join(os.path.expanduser("~"), ".smoked-salmon", "src", "salmon", "data", "config.default.toml")
+        ),
+        os.path.abspath(os.path.join(os.path.expanduser("~"), ".smoked-salmon", "salmon", "data", "config.default.toml")),
     ]
 
     # Try deriving from the installed salmon executable path.
@@ -296,6 +323,7 @@ def find_smoked_salmon_default_config_template_path() -> str:
         candidates.extend(
             [
                 os.path.abspath(os.path.join(salmon_dir, "..", "src", "salmon", "data", "config.default.toml")),
+                os.path.abspath(os.path.join(salmon_dir, "..", "salmon", "data", "config.default.toml")),
                 os.path.abspath(os.path.join(salmon_dir, "..", "lib", "python3.12", "site-packages", "salmon", "data", "config.default.toml")),
                 os.path.abspath(os.path.join(salmon_dir, "..", "lib", "python3.11", "site-packages", "salmon", "data", "config.default.toml")),
                 os.path.abspath(os.path.join(salmon_dir, "..", "lib", "python3.10", "site-packages", "salmon", "data", "config.default.toml")),
@@ -662,7 +690,7 @@ def install_uv_tool(
     _salmon_debug("Installing uv tool.")
     log_path = os.path.abspath(os.path.join("exports", "uv_install_last.log"))
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
-    timeout_seconds = 900
+    timeout_seconds = SALMON_UV_INSTALL_TIMEOUT_SECONDS
 
     if os.name == "nt":
         cmd = [
@@ -749,7 +777,7 @@ def run_smoked_salmon_uploads(
     base_cmd = resolve_smoked_salmon_command()
     log_path = os.path.abspath(os.path.join("exports", "smoked_salmon_last.log"))
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
-    timeout_seconds = 3600
+    timeout_seconds = SALMON_UPLOAD_TIMEOUT_SECONDS
     source_arg = source.strip().upper() or "WEB"
     try:
         extra_tokens = shlex.split(extra_args) if extra_args.strip() else []
@@ -782,21 +810,7 @@ def run_smoked_salmon_uploads(
     lossy_comment_value = (lossy_master_comment or "").strip()
     merged_prompt_responses = dict(custom_prompt_responses or {})
 
-    prompt_responses: Dict[str, str] = {
-        "24bit detected. do you want to check whether might be upconverted?": "y\n",
-        "possible upconverts detected. would you like to quit uploading?": "n\n",
-        "log file crc does not match audio files. do you want to continue upload anyway?": "y\n",
-        "do you want to sanitize this upload?": "y\n",
-        "would you like to upload the torrent? (no to re-run metadata section)": "y\n",
-        "would you like to check downconversion options?": "y\n",
-        "select formats to convert": "*\n",
-        "confirm selection?": "y\n",
-        "are there any metadata fields you would like to edit?": "n\n",
-        "would you like to auto-tag the files with the updated metadata?": "y\n",
-        "would you like to rename the files?": "y\n",
-        "would you like to replace the original folder name?": "y\n",
-        "is the new folder name acceptable? ([n] to edit)": "y\n",
-    }
+    prompt_responses: Dict[str, str] = dict(DEFAULT_SMOKED_SALMON_PROMPT_RESPONSES)
     if lossy_choice:
         prompt_responses["is this release lossy mastered?"] = f"{lossy_choice}\n"
     if lossy_comment_value:
@@ -899,7 +913,7 @@ def run_smoked_salmon_uploads(
                     if new_text and process.stdin is not None and not process.stdin.closed:
                         prompt_scan_buffer += new_text
                         # Keep buffer bounded while preserving enough context for prompt strings.
-                        prompt_scan_buffer = prompt_scan_buffer[-20000:]
+                        prompt_scan_buffer = prompt_scan_buffer[-SALMON_PROMPT_SCAN_BUFFER_CHARS:]
                         combined_lower = prompt_scan_buffer.lower()
                         for prompt_text, response_text in prompt_responses.items():
                             latest_pos = combined_lower.rfind(prompt_text)
@@ -1084,7 +1098,7 @@ def run_smoked_salmon_command(
 
 
 
-def _read_log_tail(log_path: str, max_chars: int = 6000) -> str:
+def _read_log_tail(log_path: str, max_chars: int = SALMON_LOG_TAIL_CHARS) -> str:
     try:
         with open(log_path, "r", encoding="utf-8") as f:
             text = f.read()

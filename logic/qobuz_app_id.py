@@ -1,8 +1,9 @@
 import asyncio
+import concurrent.futures
 import logging
 import re
 import threading
-from typing import Any
+from typing import Any, Awaitable
 
 import aiohttp
 
@@ -23,10 +24,122 @@ _APP_ID_PATTERN = re.compile(
     r'"?production"?\s*:\s*\{.*?"?api"?\s*:\s*\{.*?"?appId"?\s*:\s*"(\d+)"',
     re.DOTALL,
 )
-_DISCOVERY_CONDITION = threading.Condition()
-_CACHED_QOBUZ_APP_ID = ""
-_DISCOVERY_IN_FLIGHT = False
-_DISCOVERY_STATUS = ""
+
+
+class QobuzAppIdCache:
+    def __init__(self) -> None:
+        self._condition = threading.Condition()
+        self._cached_app_id = ""
+        self._discovery_in_flight = False
+        self._discovery_status = ""
+
+    def get_cached_app_id(self) -> str:
+        with self._condition:
+            return self._cached_app_id
+
+    def cache_app_id(self, app_id: str) -> str:
+        cleaned_app_id = str(app_id or "").strip()
+        if not cleaned_app_id:
+            return ""
+        with self._condition:
+            self._cached_app_id = cleaned_app_id
+            self._condition.notify_all()
+        return cleaned_app_id
+
+    def clear(self) -> None:
+        with self._condition:
+            self._cached_app_id = ""
+            self._discovery_in_flight = False
+            self._discovery_status = ""
+            self._condition.notify_all()
+
+    def set_status(self, message: str) -> None:
+        with self._condition:
+            self._discovery_status = str(message or "").strip()
+            self._condition.notify_all()
+
+    def read_discovery_state(self) -> tuple[str, bool, str]:
+        with self._condition:
+            return self._cached_app_id, self._discovery_in_flight, self._discovery_status
+
+    def begin_discovery(self) -> bool:
+        with self._condition:
+            if self._cached_app_id or self._discovery_in_flight:
+                return False
+            self._discovery_in_flight = True
+            return True
+
+    def finish_discovery(self) -> None:
+        with self._condition:
+            self._discovery_in_flight = False
+            self._condition.notify_all()
+
+    def wait_for_update(self, timeout: float = 0.25) -> None:
+        with self._condition:
+            self._condition.wait(timeout=timeout)
+
+
+_APP_ID_CACHE = QobuzAppIdCache()
+
+
+class _BackgroundAsyncRunner:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
+        self._ready = threading.Event()
+
+    def _thread_main(self) -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        with self._lock:
+            self._loop = loop
+            self._ready.set()
+        try:
+            loop.run_forever()
+        finally:
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            loop.close()
+            with self._lock:
+                self._loop = None
+                self._thread = None
+                self._ready.clear()
+
+    def _ensure_started(self) -> asyncio.AbstractEventLoop:
+        with self._lock:
+            loop = self._loop
+            thread = self._thread
+            if loop is not None and thread is not None and thread.is_alive() and not loop.is_closed():
+                return loop
+            self._ready.clear()
+            thread = threading.Thread(target=self._thread_main, daemon=True, name="qobuz-app-id-runner")
+            self._thread = thread
+            thread.start()
+        self._ready.wait()
+        loop = self._loop
+        if loop is None:
+            raise RuntimeError("Background async runner failed to start.")
+        return loop
+
+    def run(self, awaitable: Awaitable[Any]) -> Any:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(awaitable)
+
+        loop = self._ensure_started()
+        future = asyncio.run_coroutine_threadsafe(awaitable, loop)
+        try:
+            return future.result()
+        except concurrent.futures.CancelledError as exc:
+            raise RuntimeError("Background Qobuz App ID task was cancelled.") from exc
+
+
+_ASYNC_RUNNER = _BackgroundAsyncRunner()
 
 
 def extract_qobuz_bundle_url(player_html: str) -> str:
@@ -44,36 +157,19 @@ def extract_qobuz_app_id(bundle_js: str) -> str:
 
 
 def get_cached_qobuz_app_id() -> str:
-    with _DISCOVERY_CONDITION:
-        return _CACHED_QOBUZ_APP_ID
+    return _APP_ID_CACHE.get_cached_app_id()
 
 
 def cache_qobuz_app_id(app_id: str) -> str:
-    cleaned_app_id = str(app_id or "").strip()
-    if not cleaned_app_id:
-        return ""
-
-    global _CACHED_QOBUZ_APP_ID
-    with _DISCOVERY_CONDITION:
-        _CACHED_QOBUZ_APP_ID = cleaned_app_id
-        _DISCOVERY_CONDITION.notify_all()
-    return cleaned_app_id
+    return _APP_ID_CACHE.cache_app_id(app_id)
 
 
-def reset_cached_qobuz_app_id_for_tests() -> None:
-    global _CACHED_QOBUZ_APP_ID, _DISCOVERY_IN_FLIGHT, _DISCOVERY_STATUS
-    with _DISCOVERY_CONDITION:
-        _CACHED_QOBUZ_APP_ID = ""
-        _DISCOVERY_IN_FLIGHT = False
-        _DISCOVERY_STATUS = ""
-        _DISCOVERY_CONDITION.notify_all()
+def clear_cached_qobuz_app_id() -> None:
+    _APP_ID_CACHE.clear()
 
 
 def _set_discovery_status(message: str) -> None:
-    global _DISCOVERY_STATUS
-    with _DISCOVERY_CONDITION:
-        _DISCOVERY_STATUS = str(message or "").strip()
-        _DISCOVERY_CONDITION.notify_all()
+    _APP_ID_CACHE.set_status(message)
 
 
 def _emit_discovery_status(message: str, status_callback: Any = None) -> None:
@@ -89,26 +185,7 @@ def _emit_discovery_status(message: str, status_callback: Any = None) -> None:
 
 
 def _run_coroutine_sync(awaitable):
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(awaitable)
-
-    result: list[Any] = []
-    error: list[BaseException] = []
-
-    def _runner() -> None:
-        try:
-            result.append(asyncio.run(awaitable))
-        except BaseException as exc:  # pragma: no cover - defensive bridge for UI runtimes
-            error.append(exc)
-
-    thread = threading.Thread(target=_runner, daemon=True)
-    thread.start()
-    thread.join()
-    if error:
-        raise error[0]
-    return result[0]
+    return _ASYNC_RUNNER.run(awaitable)
 
 
 async def discover_qobuz_app_id_async(
@@ -182,24 +259,19 @@ def discover_qobuz_app_id_sync(
         _emit_discovery_status("Using cached auto-discovered Qobuz App ID.", status_callback)
         return cached_app_id
 
-    global _DISCOVERY_IN_FLIGHT
     last_seen_status = ""
     while True:
-        with _DISCOVERY_CONDITION:
-            cached_app_id = _CACHED_QOBUZ_APP_ID
-            in_flight = _DISCOVERY_IN_FLIGHT
-            status_message = _DISCOVERY_STATUS
-            if cached_app_id:
-                if status_callback is not None:
-                    try:
-                        status_callback("Using shared auto-discovered Qobuz App ID.")
-                    except Exception:
-                        logger.debug("Ignoring Qobuz App ID status callback failure.", exc_info=True)
-                return cached_app_id
-            if not in_flight:
-                _DISCOVERY_IN_FLIGHT = True
-                break
-            _DISCOVERY_CONDITION.wait(timeout=0.25)
+        cached_app_id, in_flight, status_message = _APP_ID_CACHE.read_discovery_state()
+        if cached_app_id:
+            if status_callback is not None:
+                try:
+                    status_callback("Using shared auto-discovered Qobuz App ID.")
+                except Exception:
+                    logger.debug("Ignoring Qobuz App ID status callback failure.", exc_info=True)
+            return cached_app_id
+        if not in_flight and _APP_ID_CACHE.begin_discovery():
+            break
+        _APP_ID_CACHE.wait_for_update(timeout=0.25)
 
         if status_message and status_message != last_seen_status and status_callback is not None:
             try:
@@ -221,6 +293,4 @@ def discover_qobuz_app_id_sync(
             _emit_discovery_status("Qobuz App ID discovered from web player.", status_callback)
         return app_id
     finally:
-        with _DISCOVERY_CONDITION:
-            _DISCOVERY_IN_FLIGHT = False
-            _DISCOVERY_CONDITION.notify_all()
+        _APP_ID_CACHE.finish_discovery()

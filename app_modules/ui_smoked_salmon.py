@@ -1,8 +1,6 @@
 from io import StringIO
 import os
 import re
-import sys
-from datetime import datetime, timezone
 
 import streamlit as st
 
@@ -21,6 +19,9 @@ from app_modules.smoked_salmon import (
     save_smoked_salmon_config_text,
 )
 
+UI_SALMON_LOG_TAIL_CHARS = 6000
+UI_SALMON_LOG_PREVIEW_CHARS = 12000
+
 
 def _ui_salmon_debug(message: str) -> None:
     emit_debug("ui smoked-salmon", message)
@@ -32,7 +33,7 @@ def _read_text_upload(uploaded_file) -> str:
     return uploaded_file.getvalue().decode("utf-8", errors="ignore")
 
 
-def _read_log_tail(log_path: str, max_chars: int = 6000) -> str:
+def _read_log_tail(log_path: str, max_chars: int = UI_SALMON_LOG_TAIL_CHARS) -> str:
     try:
         with open(log_path, "r", encoding="utf-8") as f:
             text = f.read()
@@ -301,6 +302,10 @@ def render_smoked_salmon_tab(
                             st.code(cmd, language="bash" if os.name != "nt" else "powershell")
                 if not status.get("has_salmon"):
                     st.error("`salmon` command is not detected.")
+                elif status.get("salmon_command_mode") == "path":
+                    st.info("Using `salmon` from PATH.")
+                elif status.get("salmon_command_mode") == "uv":
+                    st.info("Using `uv tool run salmon`.")
                 if status.get("has_uv"):
                     st.info(f"Detected uv executable: `{status.get('uv_command', '')}`")
                 else:
@@ -586,8 +591,8 @@ def render_smoked_salmon_tab(
                     live_spectral_links.markdown("\n".join([f"- {url}" for url in spectral_urls[:12]]))
                     try:
                         live_spectral_images.image(spectral_urls[:8], width=280)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _ui_salmon_debug(f"Could not render live spectral preview images: {exc}")
 
             with st.spinner("Running smoked-salmon uploads..."):
                 lossy_choice_map = {
@@ -636,6 +641,7 @@ def render_smoked_salmon_tab(
         st.caption(f"Last smoked-salmon log: {st.session_state.salmon_last_log_path}")
         with open(st.session_state.salmon_last_log_path, "r", encoding="utf-8") as f:
             log_text = f.read()
+        st.caption("Combined console output for all upload attempts in the last run.")
         st.download_button(
             "Download Smoked Salmon Log",
             data=log_text,
@@ -646,11 +652,19 @@ def render_smoked_salmon_tab(
         )
         st.text_area(
             "Smoked Salmon Log (tail)",
-            value=log_text[-4000:],
+            value=log_text[-UI_SALMON_LOG_PREVIEW_CHARS:],
             height=220,
             key="salmon_log_tail",
             disabled=locked,
         )
+        with st.expander("Show Full Console Log", expanded=False):
+            st.text_area(
+                "Smoked Salmon Log (full)",
+                value=log_text,
+                height=420,
+                key="salmon_log_full",
+                disabled=True,
+            )
         spectral_urls = _extract_spectral_urls(log_text)
         if spectral_urls:
             st.caption("Spectral/Lossy URLs detected in last log:")

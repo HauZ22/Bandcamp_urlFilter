@@ -1,11 +1,12 @@
 import os
-import sys
-from datetime import datetime, timezone
 
 import streamlit as st
 
 from app_modules.debug_logging import emit_debug
 from app_modules.streamrip import extract_qobuz_urls, run_streamrip_batches
+
+UI_TOOLS_LOG_TAIL_CHARS = 6000
+UI_TOOLS_LOG_PREVIEW_CHARS = 4000
 
 
 def _ui_tools_debug(message: str) -> None:
@@ -20,7 +21,7 @@ def _read_text_upload(uploaded_files) -> list[tuple[str, str]]:
     return [(f.name, f.getvalue().decode("utf-8", errors="ignore")) for f in uploaded_files]
 
 
-def _read_log_tail(log_path: str, max_chars: int = 6000) -> str:
+def _read_log_tail(log_path: str, max_chars: int = UI_TOOLS_LOG_TAIL_CHARS) -> str:
     try:
         with open(log_path, "r", encoding="utf-8", errors="replace") as f:
             text = f.read()
@@ -264,7 +265,7 @@ def render_direct_qobuz_rip_tab(
         )
         st.text_area(
             "Direct Rip Log (tail)",
-            value=log_text[-4000:],
+            value=log_text[-UI_TOOLS_LOG_PREVIEW_CHARS:],
             height=220,
             key="direct_qobuz_log_tail",
             disabled=locked,

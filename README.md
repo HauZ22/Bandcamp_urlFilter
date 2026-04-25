@@ -52,6 +52,24 @@ services:
       APP_AUTH_ENABLED: ${APP_AUTH_ENABLED:-0}
       APP_AUTH_USERNAME: ${APP_AUTH_USERNAME:-}
       APP_AUTH_PASSWORD_HASH: ${APP_AUTH_PASSWORD_HASH:-}
+      APP_AUTH_SESSION_TTL_SECONDS: ${APP_AUTH_SESSION_TTL_SECONDS:-43200}
+      APP_AUTH_MAX_FAILURES: ${APP_AUTH_MAX_FAILURES:-5}
+      APP_AUTH_LOCKOUT_SECONDS: ${APP_AUTH_LOCKOUT_SECONDS:-900}
+      APP_AUTH_COOKIE_NAME: ${APP_AUTH_COOKIE_NAME:-bandcamp_urlfilter_auth_session}
+      APP_AUTH_COOKIE_SECURE: ${APP_AUTH_COOKIE_SECURE:-1}
+      APP_DEBUG_LOG_ENABLED: ${APP_DEBUG_LOG_ENABLED:-0}
+      APP_DEBUG_STDERR: ${APP_DEBUG_STDERR:-0}
+      APP_TIMEZONE: ${APP_TIMEZONE:-UTC}
+      RED_API_KEY: ${RED_API_KEY:-}
+      RED_SESSION_COOKIE: ${RED_SESSION_COOKIE:-}
+      RED_URL: ${RED_URL:-https://redacted.sh}
+      OPS_API_KEY: ${OPS_API_KEY:-}
+      OPS_SESSION_COOKIE: ${OPS_SESSION_COOKIE:-}
+      OPS_URL: ${OPS_URL:-https://orpheus.network}
+      GLOBAL_PROXY: ${GLOBAL_PROXY:-}
+      BANDCAMP_PROXY: ${BANDCAMP_PROXY:-}
+      QOBUZ_PROXY: ${QOBUZ_PROXY:-}
+      TRACKER_PROXY: ${TRACKER_PROXY:-}
     volumes:
       - ./exports:/app/exports
       - ./docker-data/config:/config
@@ -128,7 +146,9 @@ Notes:
 - `QOBUZ_USER_AUTH_TOKEN` is required for live Qobuz matching.
 - `QOBUZ_APP_ID` is optional. If it is missing, the app tries to discover it from the Qobuz web player.
 - `APP_AUTH_*` is optional, but strongly recommended if the app will be reachable on the public web. `APP_AUTH_COOKIE_NAME` lets you namespace the browser cookie when several apps share the same host.
+- Important auth limitation: because Streamlit does not expose a server-side `Set-Cookie` hook here, the built-in app auth cookie is synchronized from client-side JavaScript and therefore cannot be `HttpOnly`. Use HTTPS, keep `APP_AUTH_COOKIE_SECURE=1`, and prefer reverse-proxy or IdP-backed auth in front of the app for Internet-facing deployments.
 - Built-in app auth now expires authenticated sessions after 12 hours by default and locks sign-in after 5 failed attempts for 15 minutes.
+- `APP_TIMEZONE` is optional and controls user-facing timestamp display in the UI. It accepts IANA timezone names such as `UTC`, `Europe/Berlin`, or `America/New_York`. If omitted or invalid, the app falls back to `UTC`.
 - tracker credentials are optional and only needed for duplicate checking / upload helper features
 - proxy vars are all optional and off by default. `GLOBAL_PROXY` is the fallback for every service; service-specific vars (`BANDCAMP_PROXY`, `QOBUZ_PROXY`, `TRACKER_PROXY`) override it for that service only. Supported schemes: `http://`, `https://`, `socks5://`.
 - `.env` is ignored by Git.
@@ -176,7 +196,7 @@ The repo also includes:
 - [docker-compose.ghcr.yml](docker-compose.ghcr.yml)
 - [docker/entrypoint.sh](docker/entrypoint.sh)
 
-The compose services pick up `QOBUZ_APP_ID`, `QOBUZ_USER_AUTH_TOKEN`, and optional `APP_AUTH_*` settings from your shell environment or the project `.env` file if present.
+The compose services now pass through every app env var from [`.env.example`](.env.example), so you can override them from your shell environment, the project `.env` file, or `docker compose --env-file ...`.
 
 Automated image publishing:
 
@@ -299,5 +319,3 @@ uv tool install git+https://github.com/smokin-salmon/smoked-salmon
 ## Script Reference
 
 See [docs/scripts.md](docs/scripts.md) for a summary of every launcher and helper script in the repo.
-
-

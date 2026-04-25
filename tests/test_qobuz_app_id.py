@@ -1,20 +1,20 @@
 import unittest
 
 from logic.qobuz_app_id import (
+    clear_cached_qobuz_app_id,
     cache_qobuz_app_id,
     extract_qobuz_app_id,
     extract_qobuz_bundle_url,
     get_cached_qobuz_app_id,
-    reset_cached_qobuz_app_id_for_tests,
 )
 
 
 class QobuzAppIdTests(unittest.TestCase):
     def setUp(self) -> None:
-        reset_cached_qobuz_app_id_for_tests()
+        clear_cached_qobuz_app_id()
 
     def tearDown(self) -> None:
-        reset_cached_qobuz_app_id_for_tests()
+        clear_cached_qobuz_app_id()
 
     def test_extract_bundle_url_returns_absolute_qobuz_url(self) -> None:
         html = '<html><script src="/resources/123/bundle.js"></script></html>'

@@ -14,6 +14,15 @@ logger = logging.getLogger(__name__)
 REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=20)
 
 
+def _scrape_result(status: str, url: str, **payload) -> dict:
+    result = {
+        "status": str(status or "").strip() or "error",
+        "url": str(url or "").strip(),
+    }
+    result.update(payload)
+    return result
+
+
 class HostRateLimiter:
     """Applies a minimum delay between requests per host."""
 
@@ -98,15 +107,15 @@ async def fetch_with_retries(
                     if attempt < max_retries - 1:
                         await asyncio.sleep(delay)
                 else:
-                    logger.warning(f"Failed to fetch {url}. Status: {response.status}")
+                    logger.warning("Failed to fetch %s. Status: %s", url, response.status)
                     return ""
         except asyncio.TimeoutError:
             delay = (base_delay * (2 ** attempt)) + random.uniform(0, base_delay * 0.35)
             logger.warning("Timeout fetching %s (attempt %s/%s). Waiting %.1fs...", url, attempt + 1, max_retries, delay)
             if attempt < max_retries - 1:
                 await asyncio.sleep(delay)
-        except Exception as e:
-            logger.error(f"Error fetching {url}: {e}")
+        except Exception as exc:
+            logger.error("Error fetching %s: %s", url, exc)
             return ""
             
     return ""
@@ -119,9 +128,16 @@ async def scrape_bandcamp_metadata(
     base_delay: float = 10.0,
     proxy: Optional[str] = None,
 ) -> dict:
-    html = await fetch_with_retries(session, url, max_retries=max_retries, base_delay=base_delay, rate_limiter=rate_limiter, proxy=proxy)
+    html = await fetch_with_retries(
+        session,
+        url,
+        max_retries=max_retries,
+        base_delay=base_delay,
+        rate_limiter=rate_limiter,
+        proxy=proxy,
+    )
     if not html:
-        return {}
+        return _scrape_result("fetch_failed", url, error_msg="Could not fetch Bandcamp page.")
         
     try:
         soup = BeautifulSoup(html, 'html.parser')
@@ -131,7 +147,7 @@ async def scrape_bandcamp_metadata(
         if ld_json_tag:
             raw_json = ld_json_tag.string or ld_json_tag.get_text(strip=True)
             if not raw_json:
-                return {"status": "json_ld_not_found", "url": url}
+                return _scrape_result("json_ld_not_found", url)
 
             data = json.loads(raw_json)
             
@@ -173,8 +189,8 @@ async def scrape_bandcamp_metadata(
                         "status": "success"
                     }
                     
-        return {"status": "json_ld_not_found", "url": url}
+        return _scrape_result("json_ld_not_found", url)
 
-    except Exception as e:
-        logger.error(f"Error parsing metadata for {url}: {e}")
-        return {"status": "error", "error_msg": str(e), "url": url}
+    except Exception as exc:
+        logger.error("Error parsing metadata for %s: %s", url, exc)
+        return _scrape_result("error", url, error_msg=str(exc))

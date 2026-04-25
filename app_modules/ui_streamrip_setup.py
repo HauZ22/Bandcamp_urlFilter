@@ -7,6 +7,7 @@ import streamlit as st
 
 from app_modules.debug_logging import emit_debug
 from app_modules.filesystem import list_directory_entries
+from app_modules.ui_js import run_inline_script
 from app_modules.streamrip import (
     CODEC_OPTIONS,
     QUALITY_OPTIONS,
@@ -177,7 +178,7 @@ def render_streamrip_setup(
         if not label:
             return
         label_js = json.dumps(label)
-        st.iframe(
+        run_inline_script(
             f"""
             <script>
                 const doc = window.parent.document;

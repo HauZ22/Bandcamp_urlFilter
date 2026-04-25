@@ -1,7 +1,5 @@
 import asyncio
 import os
-import sys
-from datetime import datetime, timezone
 from io import StringIO
 from typing import Optional
 
@@ -14,12 +12,15 @@ from app_modules.matching import process_batch
 from app_modules.streamrip import export_qobuz_batches, run_streamrip_batches
 from logic.gazelle_api import GazelleAPI
 
+UI_PROCESSING_LOG_TAIL_CHARS = 6000
+UI_PROCESSING_LOG_PREVIEW_CHARS = 4000
+
 
 def _ui_processing_debug(message: str) -> None:
     emit_debug("ui processing", message)
 
 
-def _read_log_tail(log_path: str, max_chars: int = 6000) -> str:
+def _read_log_tail(log_path: str, max_chars: int = UI_PROCESSING_LOG_TAIL_CHARS) -> str:
     try:
         with open(log_path, "r", encoding="utf-8", errors="replace") as f:
             text = f.read()
@@ -229,6 +230,7 @@ def render_results_and_exports(
     auto_rip_after_export: bool,
     streamrip_needs_setup: bool = False,
     streamrip_missing_required_fields: list[str] | None = None,
+    streamrip_rip_disabled_reason: str = "",
 ) -> None:
     if st.session_state.is_dry_run_run:
         st.markdown("---")
@@ -376,18 +378,21 @@ def render_results_and_exports(
                 "Rip This Run's Qobuz Results",
                 disabled=streamrip_needs_setup,
                 help=(
-                    "Disabled until required Streamrip settings are completed."
+                    streamrip_rip_disabled_reason
                     if streamrip_needs_setup
                     else "Run Streamrip immediately for this run's exported URLs."
                 ),
             )
 
     if streamrip_needs_setup:
-        labels = [missing_labels.get(f, f.replace("_", " ").title()) for f in missing_required_fields]
-        if labels:
-            st.warning("Rip is disabled. Missing settings: " + ", ".join(labels))
-        else:
-            st.warning("Rip is disabled. Streamrip setup is incomplete.")
+        warning_reason = str(streamrip_rip_disabled_reason or "").strip()
+        if not warning_reason:
+            labels = [missing_labels.get(f, f.replace("_", " ").title()) for f in missing_required_fields]
+            if labels:
+                warning_reason = "Missing Streamrip settings: " + ", ".join(labels)
+            else:
+                warning_reason = "Streamrip setup is incomplete."
+        st.warning(f"Rip is disabled. {warning_reason}")
         if st.button("Open Streamrip Settings Tab", key="matcher_open_streamrip_settings"):
             if missing_required_fields:
                 st.session_state.streamrip_setup_focus_field = missing_required_fields[0]
@@ -416,7 +421,10 @@ def render_results_and_exports(
                         f"Successfully created {total_batches} batch file(s) in `/exports/` and generated `run_rip.bat` and `run_rip.sh`."
                     )
 
-                should_run_rip = bool(rip_this_run_btn or (export_btn and auto_rip_after_export))
+                should_run_rip = bool(
+                    rip_this_run_btn
+                    or (export_btn and auto_rip_after_export and not streamrip_needs_setup)
+                )
                 if should_run_rip:
                     if streamrip_needs_setup:
                         _ui_processing_debug("Auto/manual rip blocked because streamrip setup is incomplete.")
@@ -525,7 +533,7 @@ def render_results_and_exports(
             file_name="streamrip_last.log",
             mime="text/plain",
         )
-        st.text_area("Last Rip Log (tail)", value=log_text[-4000:], height=220)
+        st.text_area("Last Rip Log (tail)", value=log_text[-UI_PROCESSING_LOG_PREVIEW_CHARS:], height=220)
 
 def run_tracker_diagnostic(artist: str, album: str, upc: Optional[str] = None) -> None:
     """

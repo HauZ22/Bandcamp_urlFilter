@@ -19,6 +19,24 @@ services:
       APP_AUTH_ENABLED: ${APP_AUTH_ENABLED:-0}
       APP_AUTH_USERNAME: ${APP_AUTH_USERNAME:-}
       APP_AUTH_PASSWORD_HASH: ${APP_AUTH_PASSWORD_HASH:-}
+      APP_AUTH_SESSION_TTL_SECONDS: ${APP_AUTH_SESSION_TTL_SECONDS:-43200}
+      APP_AUTH_MAX_FAILURES: ${APP_AUTH_MAX_FAILURES:-5}
+      APP_AUTH_LOCKOUT_SECONDS: ${APP_AUTH_LOCKOUT_SECONDS:-900}
+      APP_AUTH_COOKIE_NAME: ${APP_AUTH_COOKIE_NAME:-bandcamp_urlfilter_auth_session}
+      APP_AUTH_COOKIE_SECURE: ${APP_AUTH_COOKIE_SECURE:-1}
+      APP_DEBUG_LOG_ENABLED: ${APP_DEBUG_LOG_ENABLED:-0}
+      APP_DEBUG_STDERR: ${APP_DEBUG_STDERR:-0}
+      APP_TIMEZONE: ${APP_TIMEZONE:-UTC}
+      RED_API_KEY: ${RED_API_KEY:-}
+      RED_SESSION_COOKIE: ${RED_SESSION_COOKIE:-}
+      RED_URL: ${RED_URL:-https://redacted.sh}
+      OPS_API_KEY: ${OPS_API_KEY:-}
+      OPS_SESSION_COOKIE: ${OPS_SESSION_COOKIE:-}
+      OPS_URL: ${OPS_URL:-https://orpheus.network}
+      GLOBAL_PROXY: ${GLOBAL_PROXY:-}
+      BANDCAMP_PROXY: ${BANDCAMP_PROXY:-}
+      QOBUZ_PROXY: ${QOBUZ_PROXY:-}
+      TRACKER_PROXY: ${TRACKER_PROXY:-}
     volumes:
       - ./exports:/app/exports
       - ./docker-data/config:/config
@@ -122,16 +140,17 @@ STREAMLIT_SERVER_ADDRESS=0.0.0.0
 STREAMLIT_SERVER_PORT=8501
 ```
 
-Add `QOBUZ_USER_AUTH_TOKEN` to `.env` for live Qobuz matching.
+Every app env var from [`.env.example`](../.env.example) is wired through the compose files, so you can override them from your shell, a compose `.env`, or `docker compose --env-file ...`.
 
-Optional extras you can also keep in `.env`:
+Common examples:
 
+- `QOBUZ_USER_AUTH_TOKEN` for live Qobuz matching
 - `QOBUZ_APP_ID` if you want to pin it instead of relying on auto-discovery
-- `APP_AUTH_ENABLED`, `APP_AUTH_USERNAME`, and `APP_AUTH_PASSWORD_HASH` if the app will be reachable on the public web
-- `APP_AUTH_SESSION_TTL_SECONDS`, `APP_AUTH_MAX_FAILURES`, and `APP_AUTH_LOCKOUT_SECONDS` if you want to tune session expiry or lockout behavior
-- `RED_API_KEY` / `RED_SESSION_COOKIE` and `OPS_API_KEY` / `OPS_SESSION_COOKIE` for duplicate checking and upload helpers
-- `RED_URL` and `OPS_URL` if you use non-default tracker domains
-- `GLOBAL_PROXY`, `BANDCAMP_PROXY`, `QOBUZ_PROXY`, and `TRACKER_PROXY` for per-service proxy routing (all default off; supported schemes: `http://`, `https://`, `socks5://`)
+- `APP_AUTH_*` to enable and tune the built-in login gate
+- `APP_DEBUG_*` for debug logging
+- `APP_TIMEZONE` for UI timestamp display
+- `RED_*` / `OPS_*` for duplicate checking and upload helpers
+- `GLOBAL_PROXY`, `BANDCAMP_PROXY`, `QOBUZ_PROXY`, and `TRACKER_PROXY` for per-service proxy routing
 
 ## Useful Commands
 
@@ -167,4 +186,3 @@ docker compose -f docker-compose.ghcr.yml down
 - If you want to keep the app private, do not publish port `8501` beyond your reverse proxy or SSH tunnel.
 - If you do publish it, terminate HTTPS at the proxy and enable the built-in `APP_AUTH_*` gate.
 - Depending on your repository and package settings, you may need to make the first GHCR package public in GitHub Packages before anonymous pulls work.
-

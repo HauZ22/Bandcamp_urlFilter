@@ -14,6 +14,9 @@ REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=10)
 QOBUZ_FUZZY_MATCH_THRESHOLD = 80
 QOBUZ_HIRES_MINIMUM_BIT_DEPTH = 24
 QOBUZ_SEARCH_LIMIT = 10
+STATUS_AUTH_MISSING = "auth_missing"
+STATUS_APP_ID_MISSING = "app_id_missing"
+STATUS_SEARCH_ERROR = "search_error"
 
 
 async def _auto_discover_qobuz_app_id(session: aiohttp.ClientSession, proxy: str | None = None) -> str:
@@ -42,7 +45,18 @@ async def search_qobuz(
         qobuz_app_id = await _auto_discover_qobuz_app_id(session, proxy=proxy)
     if not qobuz_app_id:
         logger.warning("QOBUZ_APP_ID is missing and auto-discovery failed.")
-        return {}
+        return {
+            "status": STATUS_APP_ID_MISSING,
+            "error_msg": "QOBUZ_APP_ID is missing and auto-discovery failed.",
+            "albums": {"items": []},
+        }
+    if not qobuz_user_auth_token:
+        logger.warning("QOBUZ_USER_AUTH_TOKEN is missing; skipping Qobuz search for query %r.", query)
+        return {
+            "status": STATUS_AUTH_MISSING,
+            "error_msg": "QOBUZ_USER_AUTH_TOKEN is not configured.",
+            "albums": {"items": []},
+        }
 
     params = {
         "query": query,
@@ -74,7 +88,11 @@ async def search_qobuz(
                             content_type,
                             type(data).__name__,
                         )
-                        return {}
+                        return {
+                            "status": STATUS_SEARCH_ERROR,
+                            "error_msg": "Unexpected Qobuz payload shape.",
+                            "albums": {"items": []},
+                        }
                     return data
 
                 if response.status in (429, 500, 502, 503, 504):
@@ -90,7 +108,11 @@ async def search_qobuz(
                     continue
 
                 logger.warning("Qobuz API returned %s for query: %s", response.status, query)
-                return {}
+                return {
+                    "status": STATUS_SEARCH_ERROR,
+                    "error_msg": f"Qobuz API returned HTTP {response.status}.",
+                    "albums": {"items": []},
+                }
         except asyncio.TimeoutError:
             delay = base_delay * (2 ** attempt)
             logger.warning("Qobuz timeout for query %r. Retrying in %ss...", query, delay)
@@ -98,9 +120,17 @@ async def search_qobuz(
                 await asyncio.sleep(delay)
         except Exception as exc:
             logger.exception("Unexpected error fetching Qobuz search results for query %r: %s", query, exc)
-            return {}
+            return {
+                "status": STATUS_SEARCH_ERROR,
+                "error_msg": str(exc),
+                "albums": {"items": []},
+            }
 
-    return {}
+    return {
+        "status": STATUS_SEARCH_ERROR,
+        "error_msg": "Qobuz search exhausted retries.",
+        "albums": {"items": []},
+    }
 
 def is_match(bandcamp_data: dict, qobuz_album: dict, only_24bit: bool = False) -> bool:
     """Matches Qobuz API album data against parsed Bandcamp data."""
@@ -225,6 +255,21 @@ async def match_album(
         base_delay=base_delay,
         proxy=proxy,
     )
+    search_status = str(search_results.get("status", "")).strip().lower()
+    if search_status == STATUS_AUTH_MISSING:
+        return {
+            "status": "authentication_required",
+            "bandcamp_url": bandcamp_data.get("url"),
+            "qobuz_url": "",
+            "error_msg": str(search_results.get("error_msg", "")),
+        }
+    if search_status == STATUS_APP_ID_MISSING:
+        return {
+            "status": "configuration_error",
+            "bandcamp_url": bandcamp_data.get("url"),
+            "qobuz_url": "",
+            "error_msg": str(search_results.get("error_msg", "")),
+        }
 
     albums = search_results.get("albums", {}).get("items", [])
 

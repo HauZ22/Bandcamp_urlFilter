@@ -50,3 +50,4 @@ exports/*.log
 .streamlit/*.sqlite3
 docker-data/
 .tmp
+/salmon

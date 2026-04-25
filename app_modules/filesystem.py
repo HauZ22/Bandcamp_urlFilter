@@ -1,8 +1,8 @@
 import os
-import sys
 from datetime import datetime, timezone
 
 from app_modules.debug_logging import emit_debug
+from app_modules.time_utils import format_app_datetime
 
 
 def _filesystem_debug(message: str) -> None:
@@ -30,7 +30,13 @@ def list_directory_entries(path: str) -> list[dict]:
                         "path": entry.path,
                         "is_dir": is_dir,
                         "size": 0 if is_dir else int(stat_info.st_size),
-                        "modified": datetime.fromtimestamp(stat_info.st_mtime).strftime("%Y-%m-%d %H:%M"),
+                        "modified": format_app_datetime(
+                            datetime.fromtimestamp(
+                                stat_info.st_mtime,
+                                tz=timezone.utc,
+                            ),
+                            "%Y-%m-%d %H:%M",
+                        ),
                     }
                 )
     except Exception as e:

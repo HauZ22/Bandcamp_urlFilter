@@ -16,7 +16,7 @@ class _Fuzz:
 rapidfuzz_module.fuzz = _Fuzz()
 sys.modules.setdefault("rapidfuzz", rapidfuzz_module)
 
-from logic.qobuz_app_id import cache_qobuz_app_id, reset_cached_qobuz_app_id_for_tests
+from logic.qobuz_app_id import cache_qobuz_app_id, clear_cached_qobuz_app_id
 from logic.qobuz_matcher import is_match, match_album, search_qobuz
 
 
@@ -26,10 +26,10 @@ class QobuzMatcherTests(unittest.IsolatedAsyncioTestCase):
         self.original_user_token = os.environ.get("QOBUZ_USER_AUTH_TOKEN")
         os.environ.pop("QOBUZ_APP_ID", None)
         os.environ.pop("QOBUZ_USER_AUTH_TOKEN", None)
-        reset_cached_qobuz_app_id_for_tests()
+        clear_cached_qobuz_app_id()
 
     def tearDown(self) -> None:
-        reset_cached_qobuz_app_id_for_tests()
+        clear_cached_qobuz_app_id()
         if self.original_app_id is None:
             os.environ.pop("QOBUZ_APP_ID", None)
         else:
@@ -73,6 +73,7 @@ class QobuzMatcherTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_search_qobuz_returns_empty_dict_for_unexpected_success_payload(self) -> None:
         cache_qobuz_app_id("123456")
+        os.environ["QOBUZ_USER_AUTH_TOKEN"] = "dummy-token"
 
         class _Response:
             status = 200
@@ -92,7 +93,25 @@ class QobuzMatcherTests(unittest.IsolatedAsyncioTestCase):
                 return _Response()
 
         result = await search_qobuz(_Session(), "artist album")
-        self.assertEqual(result, {})
+        self.assertEqual(result["status"], "search_error")
+
+    async def test_match_album_reports_missing_qobuz_auth_distinctly(self) -> None:
+        cache_qobuz_app_id("123456")
+
+        class _Session:
+            pass
+
+        result = await match_album(
+            _Session(),
+            {
+                "status": "success",
+                "artist": "Artist",
+                "album": "Album",
+                "track_count": 2,
+                "url": "https://artist.bandcamp.com/album/album",
+            },
+        )
+        self.assertEqual(result["status"], "authentication_required")
 
 
 if __name__ == "__main__":

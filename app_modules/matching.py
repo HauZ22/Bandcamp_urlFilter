@@ -11,6 +11,8 @@ from logic.proxy_utils import create_connector_for_proxy, get_proxy
 from logic.qobuz_matcher import match_album
 
 STATUS_ERROR_SCRAPING = "⚠️ Error scraping Bandcamp"
+STATUS_QOBUZ_AUTH_REQUIRED = "⚠️ Qobuz auth required"
+STATUS_QOBUZ_CONFIG_ERROR = "⚠️ Qobuz configuration error"
 STATUS_MATCHED = "✅ Matched"
 STATUS_NO_MATCH = "❌ No Match on Qobuz"
 
@@ -76,6 +78,24 @@ async def process_single_entry(
         max_retries=qobuz_max_retries, base_delay=qobuz_base_delay,
         proxy=qobuz_proxy,
     )
+    if match_data.get("status") == "authentication_required":
+        _matching_debug(f"Qobuz auth missing while matching `{entry.url}`.")
+        return {
+            "Artist": bc_data.get("artist"),
+            "Album": bc_data.get("album"),
+            "Bandcamp Link": bc_data.get("url"),
+            "Qobuz Link": "",
+            "Status": STATUS_QOBUZ_AUTH_REQUIRED,
+        }
+    if match_data.get("status") == "configuration_error":
+        _matching_debug(f"Qobuz configuration error while matching `{entry.url}`.")
+        return {
+            "Artist": bc_data.get("artist"),
+            "Album": bc_data.get("album"),
+            "Bandcamp Link": bc_data.get("url"),
+            "Qobuz Link": "",
+            "Status": STATUS_QOBUZ_CONFIG_ERROR,
+        }
     if match_data.get("status") == "matched":
         _matching_debug(f"Match found for `{entry.url}`.")
         artist = match_data.get("qobuz_artist") or bc_data.get("artist")

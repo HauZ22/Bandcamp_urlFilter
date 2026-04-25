@@ -13,6 +13,9 @@ from urllib.parse import urlparse
 
 import aiohttp
 from app_modules.debug_logging import emit_debug
+
+SECONDS_PER_DAY = 24 * 60 * 60
+STREAMRIP_LOG_TAIL_CHARS = 6000
 from logic.qobuz_app_id import discover_qobuz_app_id_sync
 from logic.proxy_utils import create_connector_for_proxy, get_proxy, proxy_request_kwargs
 
@@ -699,7 +702,7 @@ def fetch_qobuz_account_info(app_id: str, user_token: str) -> tuple[bool, dict, 
     days_until_expiry: int | None = None
     if expiry_dt is not None:
         seconds_left = (expiry_dt - datetime.now(timezone.utc)).total_seconds()
-        days_until_expiry = int(seconds_left // 86400)
+        days_until_expiry = int(seconds_left // SECONDS_PER_DAY)
 
     account_info = {
         "identifier": str(identifier).strip(),
@@ -973,7 +976,7 @@ def run_streamrip_batches(
     return success_count, total_urls, failures, skipped, successes, log_path
 
 
-def _read_log_tail(log_path: str, max_chars: int = 6000) -> str:
+def _read_log_tail(log_path: str, max_chars: int = STREAMRIP_LOG_TAIL_CHARS) -> str:
     try:
         with open(log_path, "r", encoding="utf-8", errors="replace") as f:
             text = f.read()

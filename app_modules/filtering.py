@@ -1,6 +1,3 @@
-import sys
-from datetime import datetime, timezone
-
 from app_modules.debug_logging import emit_debug
 from logic.bandcamp_filter import filter_entries
 
@@ -36,7 +33,7 @@ def validate_filters(
     return errors
 
 
-def build_filtered_entries(lines: List[str], filter_config: dict, start_date, end_date):
+def build_filtered_entries(lines: list[str], filter_config: dict, start_date, end_date):
     _filtering_debug(
         f"Building filtered entries from {len(lines)} line(s). "
         f"date_filter_active={bool(start_date or end_date)}"

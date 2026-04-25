@@ -52,15 +52,15 @@ echo "Checking dependencies (quiet mode)..."
 
 echo "Checking Qobuz environment variables (optional for Dry Run)..."
 "$VENV_PYTHON" - <<'PY'
-import os, pathlib
-path = pathlib.Path('.env')
+import os
+from pathlib import Path
+from dotenv import dotenv_values
+
+path = Path(".env")
 if path.exists():
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith('#') or '=' not in line:
-            continue
-        key, value = line.split('=', 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+    for key, value in dotenv_values(path).items():
+        if key:
+            os.environ.setdefault(key, "" if value is None else str(value))
 if not os.environ.get('QOBUZ_USER_AUTH_TOKEN'):
     print('Warning: QOBUZ_USER_AUTH_TOKEN is missing.')
     print()

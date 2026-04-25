@@ -9,6 +9,7 @@ import threading
 import time
 
 import streamlit as st
+from app_modules.ui_js import run_inline_script
 
 
 MIN_PBKDF2_SHA256_ITERATIONS = 390000
@@ -19,6 +20,11 @@ _AUTH_REMEMBER_ME_TTL = 30 * 24 * 60 * 60  # 30 days
 _AUTH_COOKIE_NAME_DEFAULT = "bandcamp_urlfilter_auth_session"
 _AUTH_COOKIE_STATE_KEY = "bandcamp_urlfilter_auth_cookie_sync"
 _AUTH_DB_PATH = os.path.abspath(os.path.join(".streamlit", "bandcamp_urlfilter_auth.sqlite3"))
+AUTH_COOKIE_SECURITY_WARNING = (
+    "Known limitation: Streamlit can only sync this auth cookie from client-side JavaScript, "
+    "so it cannot be marked HttpOnly. Treat it as a lightweight app gate, not a substitute "
+    "for upstream auth at a reverse proxy or identity provider."
+)
 
 _AUTH_DB_LOCK = threading.Lock()
 
@@ -328,8 +334,8 @@ def _flush_auth_cookie_sync() -> None:
     if mode not in {"set", "clear"}:
         return
 
-    from streamlit.components.v1 import html as component_html
-
+    # This cookie is set from browser-side JavaScript because Streamlit does not expose an
+    # HTTP response hook here. That means the cookie cannot be marked HttpOnly.
     payload = {
         "cookieName": _auth_cookie_name(),
         "cookieValue": str(pending.get("token", "")),
@@ -337,7 +343,7 @@ def _flush_auth_cookie_sync() -> None:
         "mode": mode,
         "secure": _auth_cookie_secure(),
     }
-    component_html(
+    run_inline_script(
         f"""
         <script>
         (function() {{
@@ -361,7 +367,6 @@ def _flush_auth_cookie_sync() -> None:
         </script>
         """,
         height=0,
-        width=0,
     )
 
 
@@ -443,6 +448,7 @@ def render_auth_gate() -> None:
 
     st.title("Bandcamp to Qobuz Matcher")
     st.markdown("Sign in to access this app.")
+    st.warning(AUTH_COOKIE_SECURITY_WARNING)
     remaining_lockout = _remaining_lockout_seconds(now)
     if remaining_lockout > 0:
         st.error(

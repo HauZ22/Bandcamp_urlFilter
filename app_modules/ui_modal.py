@@ -3,9 +3,12 @@ import hashlib
 
 import streamlit as st
 from app_modules.debug_logging import emit_debug
+from app_modules.ui_js import run_inline_script
 
 QOBUZ_HELP_SALT = b"bandcamp-qobuz-token-help-v2"
 QOBUZ_HELP_SHA256 = "c8aba37d28cf92ed28cffb63a2c72d36a04e33bc04b6718be5a3c7a2531c97f7"
+QOBUZ_HELP_PBKDF2_ITERATIONS = 200000
+MODAL_RUNTIME_PATCH_WINDOW_MS = 4000
 QOBUZ_HELP_ENCRYPTED_TEXT = (
     "aA39JyYzqRklVNNIjt2zUQnZYc3J4LIsKtvkhT2HlW-zC-Q13AmAk-lUSCx9ropxlOeXku-Vkd1N21qtd7leWqrR-atFMwszMOVH"
     "Tec0C0AGwQKtZEGN3J3-U3RcWrzWJWhj4mxKpRBpczYlnfOHw8ukH52DSZCWR4XdscUV8T01Y-BzOf9yKSrro9gPRk3ygUk6fHQM"
@@ -98,7 +101,7 @@ def _decrypt_qobuz_help_text(passphrase: str) -> str:
         "sha256",
         passphrase.encode("utf-8"),
         QOBUZ_HELP_SALT,
-        200000,
+        QOBUZ_HELP_PBKDF2_ITERATIONS,
         dklen=len(encrypted),
     )
     decrypted = bytes(a ^ b for a, b in zip(encrypted, key))
@@ -121,7 +124,7 @@ def _open_dialog(title: str):
 def _apply_modal_runtime_patch(passphrase_mode: bool = False) -> None:
     _ui_modal_debug(f"Applying modal runtime patch. passphrase_mode={passphrase_mode}.")
     mode_js = "true" if passphrase_mode else "false"
-    st.iframe(
+    run_inline_script(
         """
         <script>
         const passphraseMode = __PASSMODE__;
@@ -235,13 +238,15 @@ def _apply_modal_runtime_patch(passphrase_mode: bool = False) -> None:
         patchModal();
         setTimeout(patchModal, 50);
         setTimeout(patchModal, 250);
-        const patchUntil = Date.now() + 4000;
+        const patchUntil = Date.now() + __PATCH_WINDOW_MS__;
         const timer = setInterval(() => {
           patchModal();
           if (Date.now() > patchUntil) clearInterval(timer);
         }, 120);
         </script>
-        """.replace("__PASSMODE__", mode_js),
+        """
+        .replace("__PASSMODE__", mode_js)
+        .replace("__PATCH_WINDOW_MS__", str(MODAL_RUNTIME_PATCH_WINDOW_MS)),
         height=1,
     )
 
