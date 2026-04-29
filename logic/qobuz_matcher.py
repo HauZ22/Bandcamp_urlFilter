@@ -8,7 +8,7 @@ import time
 import aiohttp
 from rapidfuzz import fuzz
 
-from logic.qobuz_app_id import discover_qobuz_app_id_async, get_cached_qobuz_app_id
+from logic.qobuz_app_id import clear_cached_qobuz_app_id, discover_qobuz_app_id_async, get_cached_qobuz_app_id
 from logic.proxy_utils import proxy_request_kwargs
 
 logger = logging.getLogger(__name__)
@@ -19,6 +19,7 @@ QOBUZ_SEARCH_LIMIT = 10
 STATUS_AUTH_MISSING = "auth_missing"
 STATUS_APP_ID_MISSING = "app_id_missing"
 STATUS_SEARCH_ERROR = "search_error"
+APP_ID_RETRYABLE_HTTP_STATUSES = {400, 401, 403}
 
 
 async def _auto_discover_qobuz_app_id(session: aiohttp.ClientSession, proxy: str | None = None) -> str:
@@ -42,7 +43,8 @@ async def search_qobuz(
     proxy: str | None = None,
 ) -> dict:
     url = "https://www.qobuz.com/api.json/0.2/catalog/search"
-    qobuz_app_id, qobuz_user_auth_token = get_qobuz_credentials()
+    env_qobuz_app_id, qobuz_user_auth_token = get_qobuz_credentials()
+    qobuz_app_id = env_qobuz_app_id
     if not qobuz_app_id:
         qobuz_app_id = await _auto_discover_qobuz_app_id(session, proxy=proxy)
     if not qobuz_app_id:
@@ -69,6 +71,7 @@ async def search_qobuz(
     if qobuz_user_auth_token:
         headers["X-User-Auth-Token"] = qobuz_user_auth_token
 
+    refreshed_app_id = False
     for attempt in range(max_retries):
         try:
             async with session.get(
@@ -96,6 +99,22 @@ async def search_qobuz(
                             "albums": {"items": []},
                         }
                     return data
+
+                if response.status in APP_ID_RETRYABLE_HTTP_STATUSES and not refreshed_app_id:
+                    logger.warning(
+                        "Qobuz API returned HTTP %s for query %r with App ID %r. "
+                        "Refreshing App ID from the web player and retrying once.",
+                        response.status,
+                        query,
+                        qobuz_app_id,
+                    )
+                    clear_cached_qobuz_app_id()
+                    fresh_app_id = await discover_qobuz_app_id_async(session, proxy=proxy)
+                    refreshed_app_id = True
+                    if fresh_app_id and fresh_app_id != qobuz_app_id:
+                        qobuz_app_id = fresh_app_id
+                        headers["X-App-Id"] = fresh_app_id
+                        continue
 
                 if response.status in (429, 500, 502, 503, 504):
                     delay = base_delay * (2 ** attempt)

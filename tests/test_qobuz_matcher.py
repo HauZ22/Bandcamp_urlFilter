@@ -2,6 +2,7 @@ import os
 import sys
 import types
 import unittest
+from unittest.mock import AsyncMock, patch
 
 
 rapidfuzz_module = types.ModuleType("rapidfuzz")
@@ -112,6 +113,46 @@ class QobuzMatcherTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertEqual(result["status"], "authentication_required")
+
+    async def test_search_qobuz_refreshes_app_id_once_after_auth_like_error(self) -> None:
+        os.environ["QOBUZ_APP_ID"] = "111111"
+        os.environ["QOBUZ_USER_AUTH_TOKEN"] = "dummy-token"
+
+        class _Response:
+            def __init__(self, status: int, payload: dict):
+                self.status = status
+                self.headers = {"Content-Type": "application/json"}
+                self._payload = payload
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def json(self, content_type=None):
+                return self._payload
+
+        class _Session:
+            def __init__(self):
+                self.calls: list[dict] = []
+
+            def get(self, *args, **kwargs):
+                recorded_kwargs = dict(kwargs)
+                recorded_kwargs["headers"] = dict(kwargs.get("headers", {}))
+                self.calls.append(recorded_kwargs)
+                if len(self.calls) == 1:
+                    return _Response(401, {"status": "error"})
+                return _Response(200, {"albums": {"items": [{"id": 1}]}})
+
+        session = _Session()
+        with patch("logic.qobuz_matcher.discover_qobuz_app_id_async", AsyncMock(return_value="222222")) as mock_refresh:
+            result = await search_qobuz(session, "artist album", max_retries=2, base_delay=0)
+
+        self.assertEqual(result["albums"]["items"], [{"id": 1}])
+        self.assertEqual(session.calls[0]["headers"]["X-App-Id"], "111111")
+        self.assertEqual(session.calls[1]["headers"]["X-App-Id"], "222222")
+        self.assertEqual(mock_refresh.await_count, 1)
 
 
 if __name__ == "__main__":
