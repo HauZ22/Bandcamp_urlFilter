@@ -21,7 +21,7 @@ QOBUZ_WEB_PLAYER_HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36"
     )
 }
-_BUNDLE_PATH_PATTERN = re.compile(r'src="(/resources/[^"]*bundle\.js)"')
+_SCRIPT_SRC_PATTERN = re.compile(r'<script[^>]+src=(["\'])([^"\']+\.js)\1', re.IGNORECASE)
 _APP_ID_PATTERN = re.compile(
     r'"?production"?\s*:\s*\{.*?"?api"?\s*:\s*\{.*?"?appId"?\s*:\s*"(\d+)"',
     re.DOTALL,
@@ -144,11 +144,45 @@ class _BackgroundAsyncRunner:
 _ASYNC_RUNNER = _BackgroundAsyncRunner()
 
 
+def extract_qobuz_bundle_urls(player_html: str) -> list[str]:
+    player_html = player_html or ""
+    if not player_html:
+        return []
+
+    candidates: list[tuple[int, str]] = []
+    seen: set[str] = set()
+    for _, raw_src in _SCRIPT_SRC_PATTERN.findall(player_html):
+        src = str(raw_src or "").strip()
+        if not src:
+            continue
+        if src.startswith("//"):
+            absolute_url = f"https:{src}"
+        elif src.startswith("http://") or src.startswith("https://"):
+            absolute_url = src
+        elif src.startswith("/"):
+            absolute_url = f"https://play.qobuz.com{src}"
+        else:
+            absolute_url = f"https://play.qobuz.com/{src.lstrip('/')}"
+
+        if not absolute_url.startswith("https://play.qobuz.com/"):
+            continue
+        if absolute_url in seen:
+            continue
+        seen.add(absolute_url)
+
+        # Prefer the legacy bundle entrypoint, but keep other JS assets as fallbacks.
+        priority = 0 if "bundle.js" in absolute_url else 1
+        candidates.append((priority, absolute_url))
+
+    candidates.sort(key=lambda item: (item[0], item[1]))
+    return [url for _, url in candidates]
+
+
 def extract_qobuz_bundle_url(player_html: str) -> str:
-    bundle_match = _BUNDLE_PATH_PATTERN.search(player_html or "")
-    if not bundle_match:
+    bundle_urls = extract_qobuz_bundle_urls(player_html)
+    if not bundle_urls:
         return ""
-    return f"https://play.qobuz.com{bundle_match.group(1)}"
+    return bundle_urls[0]
 
 
 def extract_qobuz_app_id(bundle_js: str) -> str:
@@ -219,37 +253,43 @@ async def discover_qobuz_app_id_async(
         logger.exception("Unexpected error fetching the Qobuz web player during App ID discovery.")
         return ""
 
-    bundle_url = extract_qobuz_bundle_url(html)
-    if not bundle_url:
+    bundle_urls = extract_qobuz_bundle_urls(html)
+    if not bundle_urls:
         logger.warning("Could not locate the Qobuz web player bundle while discovering the App ID.")
         return ""
 
-    try:
-        async with session.get(
-            bundle_url,
-            headers=QOBUZ_WEB_PLAYER_HEADERS,
-            timeout=QOBUZ_APP_ID_DISCOVERY_TIMEOUT,
-            **proxy_request_kwargs(proxy),
-        ) as response:
-            if response.status != 200:
-                logger.warning("Qobuz bundle returned HTTP %s during App ID discovery.", response.status)
-                return ""
-            bundle_js = await response.text()
-    except asyncio.TimeoutError:
-        logger.warning("Timed out while fetching the Qobuz bundle for App ID discovery.")
-        return ""
-    except aiohttp.ClientError as exc:
-        logger.warning("Qobuz bundle request failed during App ID discovery: %s", exc)
-        return ""
-    except Exception:
-        logger.exception("Unexpected error fetching the Qobuz bundle during App ID discovery.")
-        return ""
+    for bundle_url in bundle_urls:
+        try:
+            async with session.get(
+                bundle_url,
+                headers=QOBUZ_WEB_PLAYER_HEADERS,
+                timeout=QOBUZ_APP_ID_DISCOVERY_TIMEOUT,
+                **proxy_request_kwargs(proxy),
+            ) as response:
+                if response.status != 200:
+                    logger.warning(
+                        "Qobuz bundle candidate %s returned HTTP %s during App ID discovery.",
+                        bundle_url,
+                        response.status,
+                    )
+                    continue
+                bundle_js = await response.text()
+        except asyncio.TimeoutError:
+            logger.warning("Timed out while fetching the Qobuz bundle candidate %s for App ID discovery.", bundle_url)
+            continue
+        except aiohttp.ClientError as exc:
+            logger.warning("Qobuz bundle request failed for candidate %s during App ID discovery: %s", bundle_url, exc)
+            continue
+        except Exception:
+            logger.exception("Unexpected error fetching the Qobuz bundle candidate %s during App ID discovery.", bundle_url)
+            continue
 
-    app_id = extract_qobuz_app_id(bundle_js)
-    if not app_id:
-        logger.warning("Qobuz App ID discovery completed, but no App ID pattern was found in the bundle.")
-        return ""
-    return cache_qobuz_app_id(app_id)
+        app_id = extract_qobuz_app_id(bundle_js)
+        if app_id:
+            return cache_qobuz_app_id(app_id)
+
+    logger.warning("Qobuz App ID discovery completed, but no App ID pattern was found in the fetched JS assets.")
+    return ""
 
 
 def discover_qobuz_app_id_sync(

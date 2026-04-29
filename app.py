@@ -32,11 +32,6 @@ from app_modules.ui_processing import (
     render_status_log,
     run_processing_tick,
 )
-from app_modules.ui_modal import (
-    close_qobuz_help_modal,
-    init_qobuz_help_state,
-    render_modal_base_styles,
-)
 from app_modules.ui_qobuz_settings import (
     _pick_streamrip_identifier_from_account,
     render_qobuz_settings_tab,
@@ -194,7 +189,6 @@ def _configure_page_shell() -> None:
     render_auth_gate()
     st.title("🎵 Bandcamp to Qobuz Matcher")
     st.markdown("Filter your Bandcamp URLs and find exact high-resolution matches on Qobuz.")
-    render_modal_base_styles()
 
 
 def _render_main_tab_selector() -> str:
@@ -238,12 +232,6 @@ def _render_main_tab_selector() -> str:
         label_visibility="collapsed",
     )
     _app_debug(f"Main tab selected: `{main_tab}`.")
-    if main_tab != "Qobuz Settings" and (
-        st.session_state.get("qobuz_token_help_passphrase_open")
-        or st.session_state.get("qobuz_token_help_content_open")
-    ):
-        _app_debug("Closing Qobuz help modal because the active tab is no longer Qobuz Settings.")
-        close_qobuz_help_modal(clear_text=False)
     return main_tab
 
 
@@ -549,7 +537,6 @@ def _streamrip_runtime_cache_is_stale(cache: dict) -> bool:
 def main() -> None:
     _configure_page_shell()
     init_session_state()
-    init_qobuz_help_state()
     _mount_env_watchdog()
 
     main_tab = _render_main_tab_selector()

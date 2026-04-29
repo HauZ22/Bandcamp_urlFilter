@@ -5,6 +5,7 @@ from logic.qobuz_app_id import (
     cache_qobuz_app_id,
     extract_qobuz_app_id,
     extract_qobuz_bundle_url,
+    extract_qobuz_bundle_urls,
     get_cached_qobuz_app_id,
 )
 
@@ -21,6 +22,24 @@ class QobuzAppIdTests(unittest.TestCase):
         self.assertEqual(
             extract_qobuz_bundle_url(html),
             "https://play.qobuz.com/resources/123/bundle.js",
+        )
+
+    def test_extract_bundle_urls_prioritizes_qobuz_bundle_and_keeps_fallback_assets(self) -> None:
+        html = """
+        <html>
+            <script src="https://cdn.example.com/app.js"></script>
+            <script src="/assets/runtime.js"></script>
+            <script src="/resources/123/bundle.js"></script>
+            <script src="/assets/main.js"></script>
+        </html>
+        """
+        self.assertEqual(
+            extract_qobuz_bundle_urls(html),
+            [
+                "https://play.qobuz.com/resources/123/bundle.js",
+                "https://play.qobuz.com/assets/main.js",
+                "https://play.qobuz.com/assets/runtime.js",
+            ],
         )
 
     def test_extract_qobuz_app_id_reads_production_api_value(self) -> None:
